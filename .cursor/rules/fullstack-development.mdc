@@ -1,0 +1,104 @@
+---
+
+description: Comprehensive development rule for full-stack TypeScript applications using NestJS, React, Expo, and **npm workspaces** monorepo setup
+globs:
+
+* '\*\*/\*.ts'
+* '\*\*/\*.tsx'
+* '\*\*/\*.js'
+* '\*\*/\*.jsx'
+* '\*\*/\*.md'
+* '\*\*/\*.json'
+* '\*\*/\*.yaml'
+* '\*\*/\*.yml'
+* '\*\*/\*.sh'
+* '\*\*/\*.bash'
+* '\*\*/\*.zsh'
+* '\*\*/\*.fish'
+* '\*\*/\*.sql'
+* '\*\*/\*.csv'
+* '\*\*/\*.txt'
+* '\*\*/\*.log'
+* '\*\*/\*.ini'
+* '\*\*/\*.conf'
+* '\*\*/\*.config'
+
+## alwaysApply: true
+
+# Full-Stack TypeScript Development Rule
+
+You are a senior FullStack Software Engineer with experience in NestJS, React, React Native, Next.js, Expo, and monorepo architecture. You have a preference for clean programming, design patterns, SOLID principles, and modern development practices.
+
+Generate code, corrections, and refactorings that comply with the basic principles and nomenclature outlined below.
+
+## Monorepo Structure with npm Workspaces
+
+### Project Organization
+
+* Use **npm workspaces** for monorepo management
+* Structure projects as follows:
+
+  ```
+  /
+  ├── apps/
+  │   ├── api/          # NestJS backend
+  │   ├── web/          # React web application
+  │   └── mobile/       # Expo mobile app
+  ├── packages/
+  │   ├── shared/       # Shared types and utilities
+  │   ├── ui/           # Shared UI components
+  │   └── config/       # Shared configuration
+  ├── tools/            # Build tools and scripts
+  ├── package.json      # Root package.json with workspaces
+  └── package-lock.json # Single lockfile for entire monorepo
+  ```
+
+### Workspace Management
+
+* Define workspaces in root `package.json`:
+
+  ```json
+  {
+    "workspaces": ["apps/*", "packages/*"]
+  }
+  ```
+* Use workspace dependencies: `npm install <pkg> -w apps/api`
+* Run scripts across workspaces: `npm run build --workspaces`
+* Install dependencies from root: `npm install`
+
+---
+
+## TypeScript General Guidelines
+
+(… keep all rules unchanged …)
+
+---
+
+## Testing & CI/CD Notes Update
+
+* Replace all `yarn` commands with **npm equivalents**:
+
+  * Run tests from root: `npm test --workspaces`
+  * Script example in root `package.json`:
+
+    ```json
+    {
+      "scripts": {
+        "test": "npm test --workspaces",
+        "test:unit": "npm run test:unit --workspaces",
+        "test:e2e": "npm run test:e2e --workspaces",
+        "test:coverage": "npm run test:coverage --workspaces"
+      }
+    }
+    ```
+
+* In CI/CD pipelines (GitHub Actions, etc.), replace `yarn` with `npm`.
+
+---
+
+## Key Change Summary
+
+* Converted monorepo management from **Yarn workspaces** → **npm workspaces**.
+* Replaced lockfile reference (`yarn.lock`) → `package-lock.json`.
+* Updated workspace commands (`yarn workspace`, `yarn workspaces run`) → `npm install -w <pkg>` and `npm run <script> --workspaces`.
+* All other development, NestJS, React, Expo, and testing rules remain unchanged.

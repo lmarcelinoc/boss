@@ -1,0 +1,44 @@
+# Redis service for SaaS Boilerplate
+# Following architecture.md specifications for session management and caching
+# Usage: docker compose -f docker-compose.yml -f redis/docker-compose.redis.yml up
+
+version: '3.8'
+
+services:
+  # Redis for session management, caching, and queuing (per architecture.md)
+  redis:
+    container_name: supabase-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      interval: 5s
+      retries: 5
+    environment:
+      # Redis configuration
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    networks:
+      - default
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+
+volumes:
+  redis_data:
+    driver: local
+
+# Use the default network from the main docker-compose.yml
+networks:
+  default:
+    external: false
+

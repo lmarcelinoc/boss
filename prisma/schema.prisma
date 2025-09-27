@@ -1,0 +1,376 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+}
+
+// Tenants (Organizations) - The core multi-tenant entity
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  domain    String?  @unique
+  logoUrl   String?
+  settings  Json     @default("{}")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relationships
+  users         User[]
+  subscriptions Subscription[]
+  files         File[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+
+  @@map("tenants")
+}
+
+// Users - Multi-tenant user accounts
+model User {
+  id                                String    @id @default(cuid())
+  email                             String    @unique
+  password                          String
+  firstName                         String
+  lastName                          String
+  avatar                            String?
+  avatarUrl                         String?
+  isActive                          Boolean   @default(true)
+  emailVerified                     Boolean   @default(false)
+  emailVerifiedAt                   DateTime?
+  emailVerificationToken            String?
+  emailVerificationTokenExpiresAt   DateTime?
+  passwordResetToken                String?
+  passwordResetTokenExpiresAt       DateTime?
+  twoFactorEnabled                  Boolean   @default(false)
+  twoFactorSecret                   String?
+  twoFactorBackupCodes              String[]  @default([])
+  authProvider                      String    @default("local")
+  status                            String    @default("pending")
+  lastLoginAt                       DateTime?
+  lastLoginIp                       String?
+  tenantId                          String?
+  createdAt                         DateTime  @default(now())
+  updatedAt                         DateTime  @updatedAt
+
+  // Relationships
+  tenant                            Tenant?        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  profile                           UserProfile?
+  sessions                          Session[]
+  userRoles                         UserRole[]
+  notifications                     Notification[]
+  files                             File[]
+  auditLogs                         AuditLog[]
+  refreshTokens                     RefreshToken[]
+
+  @@index([tenantId])
+  @@index([email, tenantId])
+  @@index([email])
+  @@map("users")
+}
+
+// User Profiles - Extended user information
+model UserProfile {
+  id          String @id @default(cuid())
+  userId      String @unique
+  timezone    String @default("UTC")
+  locale      String @default("en-US")
+  preferences Json   @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relationships
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+// Roles - System and tenant-specific roles
+model Role {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  level       Int
+  type        RoleType  @default(SYSTEM)
+  isSystem    Boolean   @default(true)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relationships
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@unique([name])
+  @@map("roles")
+}
+
+// Permissions - Granular access control
+model Permission {
+  id          String @id @default(cuid())
+  name        String @unique
+  resource    String
+  action      String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relationships
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+// User Roles - Many-to-many relationship between users and roles
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+  createdAt DateTime @default(now())
+
+  // Relationships
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+// Role Permissions - Many-to-many relationship between roles and permissions
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  // Relationships
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+// Sessions - User authentication sessions
+model Session {
+  id                String      @id @default(cuid())
+  userId            String
+  refreshTokenHash  String?
+  deviceFingerprint String
+  deviceName        String
+  deviceType        String
+  browser           String?
+  browserVersion    String?
+  operatingSystem   String?
+  osVersion         String?
+  ipAddress         String
+  userAgent         String
+  isRememberMe      Boolean     @default(false)
+  isActive          Boolean     @default(true)
+  lastActiveAt      DateTime    @default(now())
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  revokeReason      String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  // Relationships
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([deviceFingerprint])
+  @@index([isActive])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// Refresh Tokens - JWT refresh token management
+model RefreshToken {
+  id            String    @id @default(cuid())
+  tokenId       String    @unique
+  userId        String
+  tokenHash     String?
+  isRevoked     Boolean   @default(false)
+  replacedBy    String?
+  replacesToken String?
+  deviceType    String?
+  ipAddress     String?
+  userAgent     String?
+  location      String?
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relationships
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenId])
+  @@index([isRevoked])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// Files - File upload and management
+model File {
+  id           String   @id @default(cuid())
+  filename     String
+  originalName String
+  mimeType     String
+  size         Int
+  url          String
+  tenantId     String
+  uploadedBy   String
+  metadata     Json     @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relationships
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedByUser User   @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([uploadedBy])
+  @@index([mimeType])
+  @@map("files")
+}
+
+// Notifications - User notifications system
+model Notification {
+  id       String           @id @default(cuid())
+  title    String
+  message  String
+  type     NotificationType @default(INFO)
+  userId   String
+  tenantId String
+  isRead   Boolean          @default(false)
+  readAt   DateTime?
+  metadata Json             @default("{}")
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  // Relationships
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([tenantId])
+  @@index([type])
+  @@map("notifications")
+}
+
+// Subscriptions - Billing and subscription management
+model Subscription {
+  id                   String            @id @default(cuid())
+  tenantId             String
+  planId               String
+  status               SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean           @default(false)
+  stripeSubscriptionId String?           @unique
+  stripePriceId        String?
+  stripeCustomerId     String?
+  metadata             Json              @default("{}")
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan   Plan   @relation(fields: [planId], references: [id])
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([stripeSubscriptionId])
+  @@map("subscriptions")
+}
+
+// Plans - Subscription plans
+model Plan {
+  id               String  @id @default(cuid())
+  name             String
+  description      String?
+  price            Int     // in cents
+  currency         String  @default("USD")
+  interval         PlanInterval @default(MONTH)
+  intervalCount    Int     @default(1)
+  features         Json    @default("[]")
+  limits           Json    @default("{}")
+  stripePriceId    String? @unique
+  stripeProductId  String?
+  isActive         Boolean @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relationships
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+// Audit Logs - System activity tracking
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String
+  resource  String
+  resourceId String?
+  userId    String
+  tenantId  String
+  metadata  Json     @default("{}")
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  // Relationships
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([action])
+  @@index([resource])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// Enums
+enum RoleType {
+  SYSTEM
+  CUSTOM
+}
+
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  UNPAID
+  INCOMPLETE
+  INCOMPLETE_EXPIRED
+  TRIALING
+}
+
+enum PlanInterval {
+  DAY
+  WEEK
+  MONTH
+  YEAR
+}

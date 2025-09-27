@@ -1,0 +1,48 @@
+{
+  "name": "saas-boilerplate",
+  "version": "1.0.0",
+  "description": "Full-Stack SaaS Boilerplate Platform with NestJS, Next.js, and Expo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "yarn workspaces run dev",
+    "start:api": "yarn workspace @app/api start:dev",
+    "build": "yarn workspaces run build",
+    "test": "yarn workspaces run test",
+    "test:api": "yarn workspace @app/api test",
+    "seed:db": "cd apps/api && yarn db:seed",
+    "test:unit": "yarn workspaces run test:unit",
+    "test:e2e": "yarn workspaces run test:e2e",
+    "test:coverage": "yarn workspaces run test:coverage",
+    "lint": "yarn workspaces run lint",
+    "lint:fix": "yarn workspaces run lint:fix",
+    "format": "yarn workspaces run format",
+    "clean": "yarn workspaces run clean",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:build": "docker-compose build",
+    "test:postman": "newman run postman/collections/SaaS-Boilerplate-API.postman_collection.json",
+    "test:rbac": "./postman/scripts/run-rbac-tests.sh",
+    "test:rbac:quick": "newman run postman/collections/RBAC-Tests.postman_collection.json --reporters cli"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^18.4.0",
+    "@commitlint/config-conventional": "^18.4.0",
+    "@types/node": "^20.10.0",
+    "conventional-changelog-cli": "^4.1.0",
+    "eslint": "^8.55.0",
+    "husky": "^8.0.3",
+    "lint-staged": "^15.2.0",
+    "prettier": "^3.1.0",
+    "sqlite3": "^5.1.7",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "yarn": ">=1.22.0"
+  },
+  "packageManager": "yarn@4.9.3"
+}

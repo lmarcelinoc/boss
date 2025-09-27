@@ -1,0 +1,73 @@
+{
+  "name": "saas-boilerplate-platform",
+  "version": "1.0.0",
+  "description": "Comprehensive SaaS boilerplate with NestJS backend and Next.js frontend",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "test:unit": "npm run test:unit --workspaces --if-present",
+    "test:e2e": "npm run test:e2e --workspaces --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "lint:fix": "npm run lint:fix --workspaces --if-present",
+    "format": "npm run format --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "eslint": "^8.56.0",
+    "husky": "^8.0.3",
+    "lint-staged": "^15.2.0",
+    "prettier": "^3.1.0",
+    "typescript": "^5.3.0"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged",
+      "commit-msg": "commitizen"
+    }
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  },
+  "author": "Luis Marcelino",
+  "license": "MIT",
+  "keywords": [
+    "saas",
+    "boilerplate",
+    "nestjs",
+    "nextjs",
+    "typescript",
+    "prisma",
+    "supabase",
+    "multi-tenant"
+  ],
+  "dependencies": {
+    "@prisma/client": "^6.16.2",
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "prisma": "^6.16.2",
+    "redis": "^5.8.2",
+    "sqlite3": "^5.1.7",
+    "uuid": "^13.0.0"
+  }
+}
