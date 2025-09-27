@@ -1,6 +1,6 @@
 Architecture Guide
 Overview
-The SaaS Boilerplate Platform is built with a modern, scalable architecture that supports multi-tenancy, real-time features, and enterprise-grade security. This document outlines the system architecture, design patterns, and technical decisions. It leverages NestJS for the backend and Next.js 14 for the frontend, using Prisma ORM with a Supabase PostgreSQL database and Redis for caching and queueing.
+The SaaS Boilerplate Platform is built with a modern, scalable architecture that supports multi-tenancy, real-time features, and enterprise-grade security. This document outlines the system architecture, design patterns, and technical decisions. It leverages NestJS for the backend and Next.js 14 for the frontend, using Prisma ORM with a Supabase PostdgreSQL database and Redis for caching and queueing.
 System Architecture
 High-Level Architecture
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
