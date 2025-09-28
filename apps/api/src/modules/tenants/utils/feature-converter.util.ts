@@ -14,10 +14,10 @@ export function convertFeatureToEnum(feature: string): TenantFeature | null {
   const featureMap: Record<string, TenantFeature> = {
     // Enum keys to values
     MFA_ENFORCEMENT: TenantFeature.MFA_ENFORCEMENT,
-    SSO_INTEGRATION: TenantFeature.SSO_INTEGRATION,
-    PASSWORD_POLICY: TenantFeature.PASSWORD_POLICY,
+    SSO_INTEGRATION: TenantFeature.SSO,
+    // PASSWORD_POLICY: TenantFeature.PASSWORD_POLICY, // Not available in current schema
     BULK_USER_IMPORT: TenantFeature.BULK_USER_IMPORT,
-    USER_PROVISIONING: TenantFeature.USER_PROVISIONING,
+    // USER_PROVISIONING: TenantFeature.USER_PROVISIONING, // Not available in current schema
     ADVANCED_ROLES: TenantFeature.ADVANCED_ROLES,
     EMAIL_TEMPLATES: TenantFeature.EMAIL_TEMPLATES,
     SMS_NOTIFICATIONS: TenantFeature.SMS_NOTIFICATIONS,
@@ -46,10 +46,10 @@ export function convertFeatureToEnum(feature: string): TenantFeature | null {
 
     // Direct enum values
     mfa_enforcement: TenantFeature.MFA_ENFORCEMENT,
-    sso_integration: TenantFeature.SSO_INTEGRATION,
-    password_policy: TenantFeature.PASSWORD_POLICY,
+    sso_integration: TenantFeature.SSO,
+    // password_policy: TenantFeature.PASSWORD_POLICY, // Not available in current schema
     bulk_user_import: TenantFeature.BULK_USER_IMPORT,
-    user_provisioning: TenantFeature.USER_PROVISIONING,
+    // user_provisioning: TenantFeature.USER_PROVISIONING, // Not available in current schema
     advanced_roles: TenantFeature.ADVANCED_ROLES,
     email_templates: TenantFeature.EMAIL_TEMPLATES,
     sms_notifications: TenantFeature.SMS_NOTIFICATIONS,

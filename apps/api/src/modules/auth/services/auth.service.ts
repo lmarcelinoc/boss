@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
-import { User, Tenant, UserRole } from '@prisma/client';
+import { User, Tenant } from '@prisma/client';
 
 import { PrismaService } from '../../../database/prisma.service';
 import { JwtService } from './jwt.service';
@@ -15,12 +15,16 @@ import { EmailService } from '../../email/services/email.service';
 import { SessionService } from './session.service';
 import { RoleService } from '../../rbac/services/role.service';
 import { PermissionService } from '../../rbac/services/permission.service';
+import { PrismaAuditService } from '../../audit/services/prisma-audit.service';
 import { LoginDto, RegisterDto } from '../dto';
 import {
   LoginResponse,
   LoginRequest,
   AuthProvider,
   UserStatus,
+  UserRole,
+  JwtPayload,
+  RefreshTokenPayload,
 } from '@app/shared';
 
 @Injectable()
@@ -35,7 +39,8 @@ export class AuthService {
     private readonly emailService: EmailService,
     private readonly sessionService: SessionService,
     private readonly roleService: RoleService,
-    private readonly permissionService: PermissionService
+    private readonly permissionService: PermissionService,
+    private readonly auditService: PrismaAuditService
   ) {}
 
   /**
@@ -70,6 +75,21 @@ export class AuthService {
     // Create default permissions and roles for the tenant if they don't exist
     await this.permissionService.createDefaultPermissions();
     await this.roleService.createDefaultRoles();
+
+    // Log user registration
+    await this.auditService.logUserRegistration(
+      user.id,
+      user.email,
+      user.tenantId || undefined,
+      undefined, // No request object available here
+      {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        authProvider: AuthProvider.LOCAL,
+      }
+    ).catch(error => {
+      this.logger.warn(`Failed to log user registration: ${error.message}`);
+    });
 
     // Send email verification
     await this.emailService.sendEmailVerification(user);
@@ -113,7 +133,7 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         role: UserRole.MEMBER,
-        status: user.status,
+        status: this.mapStatusToEnum(user.status),
         tenantId: user.tenantId || 'pending',
         ...(user.avatar && { avatar: user.avatar }),
       },
@@ -134,12 +154,39 @@ export class AuthService {
     });
 
     if (!user) {
+      // Log failed login attempt for non-existent user
+      await this.auditService.logLoginFailed(
+        loginDto.email,
+        'User not found',
+        undefined, // No request object available here
+        {
+          ipAddress,
+          userAgent: userAgent || 'Unknown',
+        }
+      ).catch(error => {
+        this.logger.warn(`Failed to log login attempt: ${error.message}`);
+      });
+
       throw new UnauthorizedException('Invalid credentials');
     }
 
     // Verify password
     const isPasswordValid = await argon2.verify(user.password, loginDto.password);
     if (!isPasswordValid) {
+      // Log failed login attempt for wrong password
+      await this.auditService.logLoginFailed(
+        loginDto.email,
+        'Invalid password',
+        undefined, // No request object available here
+        {
+          userId: user.id,
+          ipAddress,
+          userAgent: userAgent || 'Unknown',
+        }
+      ).catch(error => {
+        this.logger.warn(`Failed to log login attempt: ${error.message}`);
+      });
+
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -154,19 +201,23 @@ export class AuthService {
       const tenant = await this.prisma.tenant.create({
         data: {
           name: `${user.firstName}'s Organization`,
-          domain: `${user.email.split('@')[0]}-${Date.now()}`, // Unique domain
-          status: 'ACTIVE',
+          slug: `${user.email.split('@')[0]}-${Date.now()}`, // Unique slug
+          domain: `${user.email.split('@')[0]}-${Date.now()}.example.com`, // Unique domain
+          isActive: true,
         },
       });
 
       // Update user with tenant and owner role
+      const updateData: any = {
+        tenantId: tenant.id,
+        lastLoginAt: new Date(),
+      };
+      if (ipAddress) {
+        updateData.lastLoginIp = ipAddress;
+      }
       const updatedUser = await this.prisma.user.update({
         where: { id: user.id },
-        data: {
-          tenantId: tenant.id,
-          lastLoginAt: new Date(),
-          lastLoginIp: ipAddress,
-        },
+        data: updateData,
         include: { tenant: true },
       });
 
@@ -183,12 +234,15 @@ export class AuthService {
       user.tenant = tenant;
     } else {
       // Update last login for existing tenant users
+      const updateData: any = {
+        lastLoginAt: new Date(),
+      };
+      if (ipAddress) {
+        updateData.lastLoginIp = ipAddress;
+      }
       await this.prisma.user.update({
         where: { id: user.id },
-        data: {
-          lastLoginAt: new Date(),
-          lastLoginIp: ipAddress,
-        },
+        data: updateData,
       });
     }
 
@@ -249,6 +303,23 @@ export class AuthService {
       ipAddress: ipAddress || 'unknown',
       userAgent: userAgent || '',
       isRememberMe: loginDto.rememberMe || false,
+    });
+
+    // Log successful login
+    await this.auditService.logUserLogin(
+      user.id,
+      user.email,
+      user.tenantId!,
+      undefined, // No request object available here
+      {
+        userAgent: userAgent || 'Unknown',
+        deviceType,
+        browser: browserInfo.browser,
+        operatingSystem: osInfo.operatingSystem,
+        sessionId: session.id,
+      }
+    ).catch(error => {
+      this.logger.warn(`Failed to log user login: ${error.message}`);
     });
 
     // Calculate expiration time
@@ -355,7 +426,7 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         role: userRole,
-        status: user.status,
+        status: this.mapStatusToEnum(user.status),
         tenantId: user.tenantId!,
         ...(user.avatar && { avatar: user.avatar }),
       },
@@ -437,7 +508,7 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         role: userRole,
-        status: user.status,
+        status: this.mapStatusToEnum(user.status),
         tenantId: user.tenantId!,
         ...(user.avatar && { avatar: user.avatar }),
       },
@@ -668,15 +739,25 @@ export class AuthService {
   }
 
   /**
+   * Map database status string to UserStatus enum
+   */
+  private mapStatusToEnum(status: string): UserStatus {
+    const statusMapping: Record<string, UserStatus> = {
+      'active': UserStatus.ACTIVE,
+      'pending': UserStatus.PENDING,
+      'suspended': UserStatus.SUSPENDED,
+      'deleted': UserStatus.DELETED,
+    };
+    return statusMapping[status] || UserStatus.PENDING;
+  }
+
+  /**
    * Get user's role in a tenant
    */
   private async getUserRole(userId: string, tenantId: string): Promise<UserRole> {
     const userRole = await this.prisma.userRole.findFirst({
       where: {
         userId,
-        role: {
-          tenantId: tenantId,
-        },
       },
       include: {
         role: true,

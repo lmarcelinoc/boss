@@ -33,8 +33,8 @@ describe('ProfileService', () => {
     jobTitle: 'Developer',
     department: 'Engineering',
     location: 'New York',
-    privacyLevel: ProfilePrivacyLevel.TENANT_ONLY,
-    completionStatus: ProfileCompletionStatus.BASIC,
+    privacyLevel: ProfilePrivacyLevel.TEAM_ONLY,
+    completionStatus: ProfileCompletionStatus.PARTIAL,
     createdAt: new Date(),
     updatedAt: new Date(),
   } as UserProfile;
@@ -98,7 +98,7 @@ describe('ProfileService', () => {
       jest.spyOn(profileRepository, 'create').mockResolvedValue(mockProfile);
       jest
         .spyOn(profileRepository, 'getCompletionStatus')
-        .mockResolvedValue(ProfileCompletionStatus.BASIC);
+        .mockResolvedValue(ProfileCompletionStatus.PARTIAL);
       jest
         .spyOn(profileRepository, 'updateCompletionStatus')
         .mockResolvedValue(mockProfile);
@@ -194,12 +194,12 @@ describe('ProfileService', () => {
         .mockResolvedValue(['location']);
       jest
         .spyOn(profileRepository, 'getCompletionStatus')
-        .mockResolvedValue(ProfileCompletionStatus.BASIC);
+        .mockResolvedValue(ProfileCompletionStatus.PARTIAL);
 
       const result = await service.getProfileCompletion(mockUser);
 
       expect(result).toBeDefined();
-      expect(result.completionStatus).toBe(ProfileCompletionStatus.BASIC);
+      expect(result.completionStatus).toBe(ProfileCompletionStatus.PARTIAL);
       expect(result.completionPercentage).toBe(75);
       expect(result.missingFields).toEqual(['location']);
       expect(result.totalRequiredFields).toBe(6);

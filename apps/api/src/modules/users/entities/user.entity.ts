@@ -1,4 +1,5 @@
 export { User } from '@prisma/client';
+import { User as PrismaUser } from '@prisma/client';
 
 // Additional types for user metadata
 export interface UserMetadata {
@@ -9,7 +10,7 @@ export interface UserMetadata {
 }
 
 // Extend User type with metadata if needed
-export interface UserWithMetadata extends User {
+export interface UserWithMetadata extends PrismaUser {
   metadata?: UserMetadata;
   role?: string;
 }

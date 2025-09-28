@@ -1,0 +1,58 @@
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
+import { PrismaModule } from './database/prisma.module';
+
+// Import only working auth controllers
+import { AuthController } from './modules/auth/controllers/auth.controller';
+import { TwoFactorAuthController } from './modules/auth/controllers/two-factor-auth.controller';
+
+// Import core services that don't depend on TypeORM
+import { AuthService } from './modules/auth/services/auth.service';
+import { JwtTokenService } from './modules/auth/services/jwt-token.service';
+import { PasswordService } from './modules/auth/services/password.service';
+import { TwoFactorAuthService } from './modules/auth/services/two-factor-auth.service';
+import { EmailVerificationService } from './modules/auth/services/email-verification.service';
+
+// Health controller
+@Module({})
+class HealthController {
+  getHealth() {
+    return {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    };
+  }
+}
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      expandVariables: true,
+    }),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000, // 1 minute
+        limit: 100, // 100 requests per minute
+      },
+    ]),
+    ScheduleModule.forRoot(),
+    PrismaModule,
+  ],
+  controllers: [
+    AuthController,
+    TwoFactorAuthController,
+    HealthController,
+  ],
+  providers: [
+    AuthService,
+    JwtTokenService,
+    PasswordService,
+    TwoFactorAuthService,
+    EmailVerificationService,
+  ],
+})
+export class MinimalAppModule {}

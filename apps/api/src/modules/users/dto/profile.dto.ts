@@ -83,7 +83,7 @@ export class CreateProfileDto {
   @ApiPropertyOptional({
     description: 'Privacy level',
     enum: ProfilePrivacyLevel,
-    default: ProfilePrivacyLevel.TENANT_ONLY,
+    default: ProfilePrivacyLevel.TEAM_ONLY,
   })
   @IsOptional()
   @IsEnum(ProfilePrivacyLevel)

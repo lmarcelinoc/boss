@@ -1,180 +1,259 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Role, RoleLevel } from '../entities/role.entity';
-import { TenantScopedRepository } from '../../../common/repositories/tenant-scoped.repository';
+import { PrismaService } from '../../../common/services/prisma.service';
+import { Role, RoleType, Prisma } from '@prisma/client';
+import { BaseTenantScopedRepository } from '../../../common/repositories/base-tenant-scoped.repository';
 
 @Injectable()
-export class RoleRepository extends TenantScopedRepository<Role> {
-  constructor(
-    @InjectRepository(Role)
-    private readonly roleRepository: Repository<Role>
-  ) {
-    super(
-      roleRepository.target,
-      roleRepository.manager,
-      roleRepository.queryRunner
-    );
-  }
-
-  protected override getTenantIdField(): string {
-    return 'tenantId';
-  }
-
-  protected override shouldScopeByTenant(): boolean {
-    return true;
+export class RoleRepository extends BaseTenantScopedRepository {
+  constructor(prisma: PrismaService) {
+    super(prisma);
   }
 
   /**
-   * Find role by name within current tenant
+   * Find role by name
    */
   async findByName(name: string): Promise<Role | null> {
-    return this.findOneWithTenantScope({
+    return this.prisma.role.findFirst({
       where: { name },
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      }
     });
   }
 
   /**
-   * Find roles by level within current tenant
+   * Find role by ID
    */
-  async findByLevel(level: RoleLevel): Promise<Role[]> {
-    return this.findWithTenantScope({
-      where: { level },
+  async findById(id: string): Promise<Role | null> {
+    return this.prisma.role.findUnique({
+      where: { id },
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        },
+        userRoles: {
+          include: {
+            user: true
+          }
+        }
+      }
     });
   }
 
   /**
-   * Find system roles (not tenant-scoped)
+   * Find system roles
    */
   async findSystemRoles(): Promise<Role[]> {
-    return this.roleRepository.find({
-      where: { isSystem: true },
+    return this.prisma.role.findMany({
+      where: { 
+        isSystem: true,
+        isActive: true
+      },
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      },
+      orderBy: { level: 'asc' }
     });
   }
 
   /**
-   * Find custom roles within current tenant
+   * Find roles by type
    */
-  async findCustomRoles(): Promise<Role[]> {
-    return this.findWithTenantScope({
-      where: { isSystem: false },
+  async findByType(type: RoleType): Promise<Role[]> {
+    return this.prisma.role.findMany({
+      where: { 
+        type,
+        isActive: true
+      },
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      },
+      orderBy: { level: 'asc' }
     });
   }
 
   /**
-   * Find roles with pagination within current tenant
+   * Find roles by level
    */
-  async findWithPagination(
-    page: number = 1,
-    limit: number = 50,
-    level?: RoleLevel
-  ): Promise<{ roles: Role[]; total: number }> {
-    const queryBuilder = this.createTenantScopedQueryBuilder(
-      'role'
-    ).leftJoinAndSelect('role.permissions', 'permissions');
-
-    if (level) {
-      queryBuilder.andWhere('role.level = :level', { level });
-    }
-
-    // Apply safe pagination
-    const safeLimit = Math.min(Math.max(1, limit), 100);
-    const safePage = Math.max(1, page);
-    const offset = (safePage - 1) * safeLimit;
-
-    const [roles, total] = await queryBuilder
-      .skip(offset)
-      .take(safeLimit)
-      .orderBy('role.level', 'ASC')
-      .addOrderBy('role.name', 'ASC')
-      .getManyAndCount();
-
-    return { roles, total };
-  }
-
-  /**
-   * Find roles by multiple IDs within current tenant
-   */
-  override async findByIds(ids: string[]): Promise<Role[]> {
-    if (ids.length === 0) return [];
-
-    return this.createTenantScopedQueryBuilder('role')
-      .where('role.id IN (:...ids)', { ids })
-      .getMany();
-  }
-
-  /**
-   * Find parent roles within current tenant
-   */
-  async findParentRoles(): Promise<Role[]> {
-    return this.createTenantScopedQueryBuilder('role')
-      .where('role.parentRoleId IS NULL')
-      .getMany();
-  }
-
-  /**
-   * Find child roles of a specific role within current tenant
-   */
-  async findChildRoles(parentRoleId: string): Promise<Role[]> {
-    return this.findWithTenantScope({
-      where: { parentRoleId },
+  async findByLevel(level: number): Promise<Role[]> {
+    return this.prisma.role.findMany({
+      where: { 
+        level,
+        isActive: true
+      },
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      },
+      orderBy: { name: 'asc' }
     });
   }
 
   /**
-   * Count roles by level within current tenant
+   * Find active roles
    */
-  async countByLevel(level: RoleLevel): Promise<number> {
-    return this.countWithTenantScope({
-      where: { level },
+  async findActive(): Promise<Role[]> {
+    return this.prisma.role.findMany({
+      where: { isActive: true },
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      },
+      orderBy: [
+        { level: 'asc' },
+        { name: 'asc' }
+      ]
     });
   }
 
   /**
-   * Check if role name exists within current tenant
+   * Create a new role
    */
-  async nameExists(name: string): Promise<boolean> {
-    const count = await this.countWithTenantScope({
-      where: { name },
+  async create(roleData: Prisma.RoleCreateInput): Promise<Role> {
+    this.logTenantOperation('CREATE', 'Role');
+    return this.prisma.role.create({
+      data: roleData,
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      }
     });
-    return count > 0;
   }
 
   /**
-   * Find roles with permissions within current tenant
+   * Update role
+   */
+  async update(id: string, roleData: Prisma.RoleUpdateInput): Promise<Role> {
+    this.logTenantOperation('UPDATE', 'Role', id);
+    return this.prisma.role.update({
+      where: { id },
+      data: roleData,
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      }
+    });
+  }
+
+  /**
+   * Delete role (soft delete)
+   */
+  async softDelete(id: string): Promise<Role> {
+    this.logTenantOperation('DELETE', 'Role', id);
+    return this.prisma.role.update({
+      where: { id },
+      data: { 
+        isActive: false,
+        updatedAt: new Date()
+      }
+    });
+  }
+
+  /**
+   * Find roles with permissions
    */
   async findWithPermissions(): Promise<Role[]> {
-    return this.createTenantScopedQueryBuilder('role')
-      .leftJoinAndSelect('role.permissions', 'permission')
-      .orderBy('role.level', 'ASC')
-      .addOrderBy('role.name', 'ASC')
-      .getMany();
+    return this.prisma.role.findMany({
+      where: { isActive: true },
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      },
+      orderBy: [
+        { level: 'asc' },
+        { name: 'asc' }
+      ]
+    });
   }
 
   /**
-   * Get role statistics within current tenant
+   * Find roles for user
    */
-  async getRoleStats(): Promise<{
-    total: number;
-    system: number;
-    custom: number;
-    byLevel: Record<RoleLevel, number>;
-  }> {
-    const [total, system, custom] = await Promise.all([
-      this.countWithTenantScope(),
-      this.countWithTenantScope({ where: { isSystem: true } }),
-      this.countWithTenantScope({ where: { isSystem: false } }),
-    ]);
+  async findForUser(userId: string): Promise<Role[]> {
+    return this.prisma.role.findMany({
+      where: {
+        userRoles: {
+          some: {
+            userId
+          }
+        },
+        isActive: true
+      },
+      include: {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      },
+      orderBy: { level: 'asc' }
+    });
+  }
 
-    const byLevel = {} as Record<RoleLevel, number>;
-    for (const level of Object.values(RoleLevel)) {
-      if (typeof level === 'number') {
-        byLevel[level as RoleLevel] = await this.countByLevel(
-          level as RoleLevel
-        );
+  /**
+   * Count roles
+   */
+  async count(where?: Prisma.RoleWhereInput): Promise<number> {
+    return this.prisma.role.count({
+      where: {
+        ...where,
+        isActive: true
       }
-    }
+    });
+  }
 
-    return { total, system, custom, byLevel };
+  /**
+   * Find many with pagination
+   */
+  async findMany(options: {
+    skip?: number;
+    take?: number;
+    where?: Prisma.RoleWhereInput;
+    orderBy?: Prisma.RoleOrderByWithRelationInput;
+    include?: Prisma.RoleInclude;
+  } = {}): Promise<Role[]> {
+    return this.prisma.role.findMany({
+      ...options,
+      where: {
+        ...options.where,
+        isActive: true
+      },
+      include: options.include || {
+        rolePermissions: {
+          include: {
+            permission: true
+          }
+        }
+      }
+    });
   }
 }

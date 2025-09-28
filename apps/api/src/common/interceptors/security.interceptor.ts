@@ -18,10 +18,10 @@ export class SecurityInterceptor implements NestInterceptor {
 
     // Apply additional security headers
     const additionalHeaders =
-      this.securityConfigService.getAdditionalSecurityHeaders();
+      this.securityConfigService.getSecurityHeaders();
 
     Object.entries(additionalHeaders).forEach(([key, value]) => {
-      response.setHeader(key, value);
+      response.setHeader(key, value as string);
     });
 
     // Add security-related response headers

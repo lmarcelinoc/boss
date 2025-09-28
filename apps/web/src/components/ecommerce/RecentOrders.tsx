@@ -71,20 +71,18 @@ const tableData: Product[] = [
 
 export default function RecentOrders() {
   return (
-    <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white px-4 pb-3 pt-4 dark:border-gray-800 dark:bg-white/[0.03] sm:px-6">
-      <div className="flex flex-col gap-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white px-3 pb-3 pt-3 dark:border-gray-800 dark:bg-white/[0.03] sm:px-4 sm:pt-4 md:px-6">
+      <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:mb-5">
         <div>
           <h3 className="text-lg font-semibold text-gray-800 dark:text-white/90">
             Recent Orders
           </h3>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <button className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200 sm:gap-2 sm:px-4 sm:py-2.5">
             <svg
-              className="stroke-current fill-white dark:fill-gray-800"
-              width="20"
-              height="20"
+              className="stroke-current fill-white dark:fill-gray-800 w-4 h-4 sm:w-5 sm:h-5"
               viewBox="0 0 20 20"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
@@ -116,9 +114,9 @@ export default function RecentOrders() {
                 strokeWidth="1.5"
               />
             </svg>
-            Filter
+            <span className="hidden xs:inline sm:inline">Filter</span>
           </button>
-          <button className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200">
+          <button className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200 sm:gap-2 sm:px-4 sm:py-2.5">
             See all
           </button>
         </div>
@@ -161,33 +159,33 @@ export default function RecentOrders() {
             {tableData.map((product) => (
               <TableRow key={product.id} className="">
                 <TableCell className="py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="h-[50px] w-[50px] overflow-hidden rounded-md">
+                  <div className="flex items-center gap-2 sm:gap-3">
+                    <div className="h-[40px] w-[40px] overflow-hidden rounded-md sm:h-[50px] sm:w-[50px]">
                       <Image
                         width={50}
                         height={50}
                         src={product.image}
-                        className="h-[50px] w-[50px]"
+                        className="h-full w-full object-cover"
                         alt={product.name}
                       />
                     </div>
-                    <div>
-                      <p className="font-medium text-gray-800 text-theme-sm dark:text-white/90">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-800 text-sm truncate dark:text-white/90 sm:text-theme-sm">
                         {product.name}
                       </p>
-                      <span className="text-gray-500 text-theme-xs dark:text-gray-400">
+                      <span className="text-gray-500 text-xs dark:text-gray-400 sm:text-theme-xs">
                         {product.variants}
                       </span>
                     </div>
                   </div>
                 </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
+                <TableCell className="py-3 text-gray-500 text-sm dark:text-gray-400 sm:text-theme-sm">
                   {product.price}
                 </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
+                <TableCell className="py-3 text-gray-500 text-sm dark:text-gray-400 sm:text-theme-sm">
                   {product.category}
                 </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
+                <TableCell className="py-3 text-gray-500 text-sm dark:text-gray-400 sm:text-theme-sm">
                   <Badge
                     size="sm"
                     color={

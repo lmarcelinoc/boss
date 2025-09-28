@@ -5,8 +5,14 @@ import { Modal } from "../ui/modal";
 import Button from "../ui/button/Button";
 import Input from "../form/input/InputField";
 import Label from "../form/Label";
+import { ProfileResponse } from "@/types/profile";
 
-export default function UserAddressCard() {
+interface UserAddressCardProps {
+  profile: ProfileResponse | null;
+  isLoading?: boolean;
+}
+
+export default function UserAddressCard({ profile, isLoading = false }: UserAddressCardProps) {
   const { isOpen, openModal, closeModal } = useModal();
   const handleSave = () => {
     // Handle save logic here

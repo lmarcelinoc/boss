@@ -13,8 +13,8 @@ describe('SecurityMiddleware', () => {
         {
           provide: SecurityConfigService,
           useValue: {
-            getAdditionalSecurityHeaders: jest.fn(),
-            validateCorsOrigin: jest.fn(),
+            getSecurityHeaders: jest.fn(),
+            isOriginAllowed: jest.fn(),
           },
         },
       ],
@@ -61,15 +61,20 @@ describe('SecurityMiddleware', () => {
 
       // Mock security config service
       jest
-        .spyOn(securityConfigService, 'getAdditionalSecurityHeaders')
+        .spyOn(securityConfigService, 'getSecurityHeaders')
         .mockReturnValue({
           'X-Content-Type-Options': 'nosniff',
-          'X-Frame-Options': 'DENY',
+          'X-Frame-Options': 'SAMEORIGIN',
           'X-XSS-Protection': '1; mode=block',
+          'Referrer-Policy': 'strict-origin-when-cross-origin',
+          'X-Download-Options': 'noopen',
+          'X-Permitted-Cross-Domain-Policies': 'none',
+          'Cross-Origin-Opener-Policy': 'same-origin',
+          'Cross-Origin-Resource-Policy': 'same-origin',
         });
 
       jest
-        .spyOn(securityConfigService, 'validateCorsOrigin')
+        .spyOn(securityConfigService, 'isOriginAllowed')
         .mockReturnValue(true);
     });
 
@@ -77,7 +82,7 @@ describe('SecurityMiddleware', () => {
       middleware.use(mockReq, mockRes, mockNext);
 
       expect(
-        securityConfigService.getAdditionalSecurityHeaders
+        securityConfigService.getSecurityHeaders
       ).toHaveBeenCalled();
       expect(mockRes.setHeader).toHaveBeenCalledWith(
         'X-Content-Type-Options',
@@ -140,7 +145,7 @@ describe('SecurityMiddleware', () => {
 
       middleware.use(mockReq, mockRes, mockNext);
 
-      expect(securityConfigService.validateCorsOrigin).toHaveBeenCalledWith(
+      expect(securityConfigService.isOriginAllowed).toHaveBeenCalledWith(
         'http://localhost:3000'
       );
     });
@@ -151,7 +156,7 @@ describe('SecurityMiddleware', () => {
 
       middleware.use(mockReq, mockRes, mockNext);
 
-      expect(securityConfigService.validateCorsOrigin).not.toHaveBeenCalled();
+      expect(securityConfigService.isOriginAllowed).not.toHaveBeenCalled();
     });
 
     it('should not validate CORS origin when no origin header is present', () => {
@@ -160,14 +165,14 @@ describe('SecurityMiddleware', () => {
 
       middleware.use(mockReq, mockRes, mockNext);
 
-      expect(securityConfigService.validateCorsOrigin).not.toHaveBeenCalled();
+      expect(securityConfigService.isOriginAllowed).not.toHaveBeenCalled();
     });
 
     it('should return 403 when CORS origin is invalid', () => {
       mockReq.method = 'POST';
       mockReq.headers.origin = 'http://malicious-site.com';
       jest
-        .spyOn(securityConfigService, 'validateCorsOrigin')
+        .spyOn(securityConfigService, 'isOriginAllowed')
         .mockReturnValue(false);
 
       middleware.use(mockReq, mockRes, mockNext);

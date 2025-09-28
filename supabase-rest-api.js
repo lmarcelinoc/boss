@@ -434,3 +434,4 @@ app.listen(PORT, () => {
   console.log(`✅ Bypassing all database pooler authentication issues`);
   console.log(`✅ Following architecture.md specifications with REST approach`);
 });
+

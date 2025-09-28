@@ -23,11 +23,18 @@ model Tenant {
   updatedAt DateTime @updatedAt
 
   // Relationships
-  users         User[]
-  subscriptions Subscription[]
-  files         File[]
-  notifications Notification[]
-  auditLogs     AuditLog[]
+  users                User[]
+  subscriptions        Subscription[]
+  files                File[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  teams                Team[]
+  invitations          Invitation[]
+  tenantFeatureFlags   TenantFeatureFlag[]
+  tenantUsage          TenantUsage[]
+  bulkImportJobs       BulkImportJob[]
+  usageAnalytics       UsageAnalytics[]
+  analyticsAggregates  AnalyticsAggregate[]
 
   @@map("tenants")
 }
@@ -56,11 +63,12 @@ model User {
   lastLoginAt                       DateTime?
   lastLoginIp                       String?
   tenantId                          String?
+  metadata                          Json?     @default("{}")
   createdAt                         DateTime  @default(now())
   updatedAt                         DateTime  @updatedAt
 
   // Relationships
-  tenant                            Tenant?        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant                            Tenant?           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   profile                           UserProfile?
   sessions                          Session[]
   userRoles                         UserRole[]
@@ -68,6 +76,9 @@ model User {
   files                             File[]
   auditLogs                         AuditLog[]
   refreshTokens                     RefreshToken[]
+  sentInvitations                   Invitation[]
+  bulkImportJobs                    BulkImportJob[]
+  usageAnalytics                    UsageAnalytics[]
 
   @@index([tenantId])
   @@index([email, tenantId])
@@ -77,13 +88,31 @@ model User {
 
 // User Profiles - Extended user information
 model UserProfile {
-  id          String @id @default(cuid())
-  userId      String @unique
-  timezone    String @default("UTC")
-  locale      String @default("en-US")
-  preferences Json   @default("{}")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                  String              @id @default(cuid())
+  userId              String              @unique
+  tenantId            String?
+  firstName           String?
+  lastName            String?
+  displayName         String?
+  bio                 String?
+  avatarUrl           String?
+  avatarFileKey       String?
+  phoneNumber         String?
+  jobTitle            String?
+  department          String?
+  location            String?
+  website             String?
+  linkedinUrl         String?
+  twitterUrl          String?
+  githubUrl           String?
+  timezone            String              @default("UTC")
+  locale              String              @default("en-US")
+  preferences         Json                @default("{}")
+  privacyLevel        ProfilePrivacyLevel @default(PUBLIC)
+  completionStatus    ProfileCompletionStatus @default(INCOMPLETE)
+  metadata            Json?               @default("{}")
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   // Relationships
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -321,25 +350,36 @@ model Plan {
 
 // Audit Logs - System activity tracking
 model AuditLog {
-  id        String   @id @default(cuid())
-  action    String
-  resource  String
-  resourceId String?
-  userId    String
-  tenantId  String
-  metadata  Json     @default("{}")
-  ipAddress String?
-  userAgent String?
-  createdAt DateTime @default(now())
+  id            String             @id @default(cuid())
+  eventType     AuditEventType
+  userId        String?
+  tenantId      String?
+  sessionId     String?
+  ipAddress     String?
+  userAgent     String?
+  userEmail     String?
+  targetUserId  String?
+  targetUserEmail String?
+  description   String?
+  metadata      Json?
+  requestData   Json?
+  responseData  Json?
+  errorCode     String?
+  errorMessage  String?
+  source        String?
+  severity      AuditEventSeverity @default(LOW)
+  status        AuditEventStatus   @default(SUCCESS)
+  isSuspicious  Boolean            @default(false)
+  requiresReview Boolean           @default(false)
+  createdAt     DateTime           @default(now())
 
   // Relationships
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([tenantId])
-  @@index([action])
-  @@index([resource])
+  @@index([eventType])
   @@index([createdAt])
   @@map("audit_logs")
 }
@@ -373,4 +413,350 @@ enum PlanInterval {
   WEEK
   MONTH
   YEAR
+}
+
+enum AuditEventType {
+  USER_REGISTERED
+  USER_CREATED
+  USER_UPDATED
+  USER_DELETED
+  USER_LOGIN
+  LOGIN_FAILED
+  USER_LOGOUT
+  USER_ACTIVATED
+  USER_SUSPENDED
+  USER_REACTIVATED
+  EMAIL_VERIFIED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  MFA_VERIFIED
+  MFA_FAILED
+  ACCOUNT_RECOVERY_REQUESTED
+  ACCOUNT_RECOVERY_COMPLETED
+  ACCOUNT_RECOVERY_FAILED
+  SESSION_CREATED
+  SESSION_REVOKED
+  SESSION_EXPIRED
+  TENANT_CREATED
+  TENANT_UPDATED
+  TENANT_DELETED
+  TENANT_SWITCHED
+  TENANT_ACCESS_VERIFIED
+  TENANT_ACCESS_DENIED
+  TENANT_MEMBERSHIP_CREATED
+  TENANT_MEMBERSHIP_UPDATED
+  TENANT_MEMBERSHIP_DELETED
+  TENANT_MEMBERSHIP_SUSPENDED
+  TENANT_MEMBERSHIP_ACTIVATED
+  ROLE_CREATED
+  ROLE_UPDATED
+  ROLE_DELETED
+  ROLE_ASSIGNED
+  ROLE_REMOVED
+  PERMISSION_ASSIGNED
+  PERMISSION_REVOKED
+  PERMISSION_GRANTED
+  FILE_UPLOADED
+  FILE_DOWNLOADED
+  FILE_DELETED
+  BILLING_SUBSCRIPTION_CREATED
+  BILLING_SUBSCRIPTION_UPDATED
+  BILLING_SUBSCRIPTION_CANCELED
+  BILLING_SUBSCRIPTION_CANCELLED
+  BILLING_PAYMENT_SUCCEEDED
+  BILLING_PAYMENT_FAILED
+  INVITATION_CREATED
+  INVITATION_ACCEPTED
+  INVITATION_REVOKED
+  INVITATION_RESENT
+  SYSTEM_SETTING_UPDATED
+  ADMIN_IMPERSONATION_STARTED
+  ADMIN_IMPERSONATION_ENDED
+  API_KEY_CREATED
+  API_KEY_REVOKED
+  DATA_EXPORTED
+  DATA_IMPORTED
+  PASSWORD_CHANGED
+  OTHER
+}
+
+enum AuditEventSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AuditEventStatus {
+  INFO
+  SUCCESS
+  FAILURE
+  WARNING
+}
+
+// Teams - Team management within tenants
+model Team {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  tenantId    String
+  settings    Json     @default("{}")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("teams")
+}
+
+// Invitations - User invitation management
+model Invitation {
+  id           String          @id @default(cuid())
+  email        String
+  tenantId     String
+  invitedById  String
+  roleId       String?
+  status       InvitationStatus @default(PENDING)
+  token        String          @unique
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  revokedAt    DateTime?
+  metadata     Json            @default("{}")
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  // Relationships
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedBy User   @relation(fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([email])
+  @@index([tenantId])
+  @@index([token])
+  @@index([status])
+  @@map("invitations")
+}
+
+// Tenant Feature Flags - Feature toggles per tenant
+model TenantFeatureFlag {
+  id        String        @id @default(cuid())
+  tenantId  String
+  feature   TenantFeature
+  enabled   Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, feature])
+  @@index([tenantId])
+  @@map("tenant_feature_flags")
+}
+
+// Tenant Usage - Usage metrics per tenant
+model TenantUsage {
+  id        String            @id @default(cuid())
+  tenantId  String
+  metric    TenantUsageMetric
+  value     Int
+  period    DateTime
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, metric, period])
+  @@index([tenantId])
+  @@index([period])
+  @@map("tenant_usage")
+}
+
+// Bulk Import Jobs - Track bulk user imports
+model BulkImportJob {
+  id                  String              @id @default(cuid())
+  fileName            String
+  originalFileName    String
+  status              BulkImportJobStatus @default(PENDING)
+  totalRecords        Int                 @default(0)
+  processedRecords    Int                 @default(0)
+  successfulRecords   Int                 @default(0)
+  failedRecords       Int                 @default(0)
+  errors              String[]            @default([])
+  startedAt           DateTime?
+  completedAt         DateTime?
+  userId              String
+  tenantId            String
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relationships
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  importErrors ImportError[]
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([status])
+  @@map("bulk_import_jobs")
+}
+
+// Import Errors - Track errors during bulk imports
+model ImportError {
+  id              String        @id @default(cuid())
+  bulkImportJobId String
+  rowNumber       Int
+  field           String
+  fieldName       String?
+  error           String
+  errorMessage    String?
+  value           String?
+  rawData         Json?
+  createdAt       DateTime      @default(now())
+
+  // Relationships
+  bulkImportJob BulkImportJob @relation(fields: [bulkImportJobId], references: [id], onDelete: Cascade)
+
+  @@index([bulkImportJobId])
+  @@map("import_errors")
+}
+
+// Usage Analytics - Track various metrics
+model UsageAnalytics {
+  id        String          @id @default(cuid())
+  tenantId  String
+  userId    String?
+  metric    AnalyticsMetric
+  value     Int
+  timestamp DateTime
+  metadata  Json?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([metric])
+  @@index([timestamp])
+  @@map("usage_analytics")
+}
+
+// Analytics Aggregates - Pre-computed analytics for reporting
+model AnalyticsAggregate {
+  id              String          @id @default(cuid())
+  tenantId        String
+  metric          AnalyticsMetric
+  aggregationType String // 'sum', 'count', 'average', 'max', 'min'
+  value           Int
+  period          String // 'hour', 'day', 'week', 'month'
+  timestamp       DateTime
+  createdAt       DateTime        @default(now())
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, metric, aggregationType, period, timestamp])
+  @@index([tenantId])
+  @@index([metric])
+  @@index([timestamp])
+  @@map("analytics_aggregates")
+}
+
+// Additional enums
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum TenantFeature {
+  ANALYTICS
+  BILLING
+  CUSTOM_DOMAINS
+  API_ACCESS
+  TEAM_MANAGEMENT
+  ADVANCED_REPORTING
+  WHITE_LABELING
+  SSO
+  AUDIT_LOGS
+  BULK_USER_IMPORT
+  ADVANCED_ROLES
+  EMAIL_TEMPLATES
+  SMS_NOTIFICATIONS
+  PUSH_NOTIFICATIONS
+  ADVANCED_FILE_MANAGEMENT
+  FILE_VERSIONING
+  FILE_ENCRYPTION
+  ADVANCED_ANALYTICS
+  CUSTOM_REPORTS
+  EXPORT_CAPABILITIES
+  API_WEBHOOKS
+  THIRD_PARTY_INTEGRATIONS
+  CUSTOM_INTEGRATIONS
+  ADVANCED_SECURITY
+  AUDIT_LOGGING
+  COMPLIANCE_REPORTING
+  USAGE_BASED_BILLING
+  ADVANCED_BILLING
+  INVOICE_CUSTOMIZATION
+  WEBSOCKET_FEATURES
+  REAL_TIME_COLLABORATION
+  LIVE_CHAT
+  ADMIN_DASHBOARD
+  SYSTEM_MONITORING
+  BACKUP_RESTORE
+  MFA_ENFORCEMENT
+}
+
+enum TenantUsageMetric {
+  USERS
+  STORAGE
+  STORAGE_BYTES
+  API_CALLS
+  BANDWIDTH
+  CUSTOM_FIELDS
+  EMAILS_SENT
+  FILES_UPLOADED
+  DATABASE_QUERIES
+  WEBSOCKET_CONNECTIONS
+  BACKGROUND_JOBS
+}
+
+enum BulkImportJobStatus {
+  PENDING
+  IN_PROGRESS
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AnalyticsMetric {
+  USER_LOGIN
+  USER_SIGNUP
+  API_CALL
+  FILE_UPLOAD
+  FILE_DOWNLOAD
+  STORAGE_USAGE
+  ACTIVE_USERS
+  FEATURE_USAGE
+}
+
+enum ProfilePrivacyLevel {
+  PUBLIC
+  PRIVATE
+  TEAM_ONLY
+}
+
+enum ProfileCompletionStatus {
+  INCOMPLETE
+  PARTIAL
+  COMPLETE
 }

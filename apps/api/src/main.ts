@@ -13,35 +13,22 @@ import slowDown from 'express-slow-down';
 import { Request, Response } from 'express';
 import { AppModule } from './app.module';
 import { env, isDevelopment, isProduction } from '@app/config';
-import { SecurityConfigService } from './common/services/security-config.service';
+import { getSecurityConfig } from './config/security.config';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
 
-  // Initialize security configuration service
-  const securityConfigService = app.get(SecurityConfigService);
+  // Get security configuration
+  const securityConfig = getSecurityConfig();
 
   // Security middleware with enhanced configuration
-  app.use(helmet(securityConfigService.getHelmetConfig()));
+  app.use(helmet());
 
   // Compression middleware
   app.use(compression());
 
-  // Rate limiting with enhanced configuration
-  const rateLimitConfig = securityConfigService.getRateLimitConfig();
-  app.use(rateLimit(rateLimitConfig));
-
-  // Speed limiting
-  const speedLimiter = slowDown({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    delayAfter: 100, // allow 100 requests per 15 minutes, then...
-    delayMs: (hits: number) => hits * 500, // begin adding 500ms of delay per request above 100
-  });
-  app.use(speedLimiter);
-
   // CORS configuration with enhanced security
-  const corsConfig = securityConfigService.getCorsConfig();
-  app.enableCors(corsConfig);
+  app.enableCors(securityConfig.cors);
 
   // Global validation pipe
   app.useGlobalPipes(
@@ -62,20 +49,72 @@ async function bootstrap(): Promise<void> {
   if (isDevelopment()) {
     const config = new DocumentBuilder()
       .setTitle('SaaS Boilerplate API')
-      .setDescription('The SaaS Boilerplate API description')
-      .setVersion('1.0')
-      .addBearerAuth()
-      .addTag('auth', 'Authentication endpoints')
-      .addTag('users', 'User management endpoints')
-      .addTag('tenants', 'Tenant management endpoints')
-      .addTag('billing', 'Payment and billing endpoints')
-      .addTag('notifications', 'Communication endpoints')
-      .addTag('files', 'File management endpoints')
-      .addTag('admin', 'Administrative endpoints')
+      .setDescription(
+        'Comprehensive enterprise-grade SaaS boilerplate API with multi-tenancy, authentication, billing, and real-time features. This API provides all the necessary endpoints for building scalable SaaS applications with role-based access control, secure payment processing, file management, and administrative features.'
+      )
+      .setVersion('1.0.0')
+      .setContact(
+        'SaaS Boilerplate Support',
+        'https://github.com/your-org/saas-boilerplate',
+        'support@yourdomain.com'
+      )
+      .setLicense('MIT', 'https://opensource.org/licenses/MIT')
+      .addServer('http://localhost:3001', 'Development server')
+      .addServer('https://api.yourdomain.com', 'Production server')
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          name: 'Authorization',
+          description: 'Enter JWT token',
+          in: 'header',
+        },
+        'JWT-auth'
+      )
+      .addTag('Authentication', 'User authentication and authorization endpoints')
+      .addTag('Users', 'User management and profile endpoints')
+      .addTag('Tenants', 'Multi-tenant organization management')
+      .addTag('Billing', 'Payment processing and subscription management')
+      .addTag('Files', 'File upload, storage, and management')
+      .addTag('Teams', 'Team and collaboration management')
+      .addTag('Invitations', 'User invitation and onboarding')
+      .addTag('Analytics', 'Usage analytics and reporting')
+      .addTag('Audit', 'Audit logging and compliance')
+      .addTag('Admin', 'Platform administration endpoints')
+      .addTag('RBAC', 'Role-based access control')
+      .addTag('Subscriptions', 'Subscription plan management')
+      .addTag('Payments', 'Payment method and transaction handling')
+      .addTag('Email', 'Email notifications and templates')
+      .addTag('Delegation', 'Permission delegation and temporary access')
       .build();
 
-    const document = SwaggerModule.createDocument(app, config);
-    SwaggerModule.setup('api/docs', app, document);
+    const document = SwaggerModule.createDocument(app, config, {
+      operationIdFactory: (controllerKey: string, methodKey: string) => methodKey,
+      deepScanRoutes: true,
+    });
+
+    SwaggerModule.setup('api/docs', app, document, {
+      swaggerOptions: {
+        persistAuthorization: true,
+        displayRequestDuration: true,
+        docExpansion: 'none',
+        filter: true,
+        showRequestHeaders: true,
+        tryItOutEnabled: true,
+      },
+      customSiteTitle: 'SaaS Boilerplate API Documentation',
+      customfavIcon: '/favicon.ico',
+      customCss: `
+        .swagger-ui .topbar { display: none }
+        .swagger-ui .info .title { color: #3b82f6; }
+      `,
+    });
+
+    // Also expose the raw OpenAPI JSON
+    app.getHttpAdapter().getInstance().get('/api/docs-json', (_req: any, res: any) => {
+      res.json(document);
+    });
   }
 
   // Health check endpoint

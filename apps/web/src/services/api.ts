@@ -3,6 +3,14 @@
  * Handles HTTP requests to the NestJS backend
  */
 
+import {
+  ProfileResponse,
+  ProfileCompletionResponse,
+  CreateProfileRequest,
+  UpdateProfileRequest,
+  UploadAvatarResponse,
+} from '../types/profile';
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 
 export interface ApiResponse<T = any> {
@@ -92,12 +100,15 @@ class ApiClient {
     });
 
     try {
+      // Only set Content-Type for non-FormData requests
+      const headers: Record<string, string> = { ...options.headers };
+      if (!(options.body instanceof FormData)) {
+        headers['Content-Type'] = 'application/json';
+      }
+
       const response = await fetch(url, {
         ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          ...options.headers,
-        },
+        headers,
       });
 
       console.log(`🌐 API: Response received`, {
@@ -297,6 +308,113 @@ class ApiClient {
   getRefreshToken(): string | null {
     if (typeof window === 'undefined') return null;
     return localStorage.getItem('refreshToken');
+  }
+
+  // Profile endpoints
+  async getMyProfile(): Promise<ApiResponse<ProfileResponse>> {
+    const token = this.getStoredToken();
+    console.log('👤 API: Getting my profile');
+    
+    return this.request<ProfileResponse>('/profiles/me', {
+      method: 'GET',
+      headers: {
+        Authorization: token ? `Bearer ${token}` : '',
+      },
+    });
+  }
+
+  async createProfile(profileData: CreateProfileRequest): Promise<ApiResponse<ProfileResponse>> {
+    const token = this.getStoredToken();
+    console.log('👤 API: Creating profile', { 
+      firstName: profileData.firstName, 
+      lastName: profileData.lastName 
+    });
+    
+    return this.request<ProfileResponse>('/profiles', {
+      method: 'POST',
+      body: JSON.stringify(profileData),
+      headers: {
+        Authorization: token ? `Bearer ${token}` : '',
+      },
+    });
+  }
+
+  async updateProfile(profileData: UpdateProfileRequest): Promise<ApiResponse<ProfileResponse>> {
+    const token = this.getStoredToken();
+    console.log('👤 API: Updating profile', { 
+      hasFirstName: !!profileData.firstName, 
+      hasLastName: !!profileData.lastName 
+    });
+    
+    return this.request<ProfileResponse>('/profiles/me', {
+      method: 'PUT',
+      body: JSON.stringify(profileData),
+      headers: {
+        Authorization: token ? `Bearer ${token}` : '',
+      },
+    });
+  }
+
+  async getProfileCompletion(): Promise<ApiResponse<ProfileCompletionResponse>> {
+    const token = this.getStoredToken();
+    console.log('📊 API: Getting profile completion status');
+    
+    return this.request<ProfileCompletionResponse>('/profiles/me/completion', {
+      method: 'GET',
+      headers: {
+        Authorization: token ? `Bearer ${token}` : '',
+      },
+    });
+  }
+
+  async uploadAvatar(file: File): Promise<ApiResponse<ProfileResponse>> {
+    const token = this.getStoredToken();
+    console.log('📷 API: Uploading avatar', { 
+      fileName: file.name, 
+      fileSize: file.size, 
+      fileType: file.type 
+    });
+
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    return this.request<ProfileResponse>('/profiles/me/avatar', {
+      method: 'POST',
+      body: formData,
+      headers: {
+        Authorization: token ? `Bearer ${token}` : '',
+      },
+    });
+  }
+
+  async deleteAvatar(): Promise<ApiResponse<ProfileResponse>> {
+    const token = this.getStoredToken();
+    console.log('🗑️ API: Deleting avatar');
+    
+    return this.request<ProfileResponse>('/profiles/me/avatar', {
+      method: 'DELETE',
+      headers: {
+        Authorization: token ? `Bearer ${token}` : '',
+      },
+    });
+  }
+
+  async deleteProfile(): Promise<ApiResponse<void>> {
+    const token = this.getStoredToken();
+    console.log('🗑️ API: Deleting profile');
+    
+    return this.request<void>('/profiles/me', {
+      method: 'DELETE',
+      headers: {
+        Authorization: token ? `Bearer ${token}` : '',
+      },
+    });
+  }
+
+  // Helper method for authenticated requests
+  private getAuthHeaders(): Record<string, string> {
+    const token = this.getStoredToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }
 }
 

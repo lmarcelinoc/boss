@@ -190,6 +190,13 @@
   body {
     @apply relative font-normal font-outfit z-1 bg-gray-50;
   }
+  /* Mobile-first viewport optimizations */
+  @media (max-width: 640px) {
+    body {
+      font-size: 14px;
+      line-height: 1.4;
+    }
+  }
 }
 
 @utility menu-item {
@@ -273,6 +280,18 @@
   &::-webkit-scrollbar-thumb {
     @apply bg-gray-200 rounded-full dark:bg-gray-700;
   }
+}
+
+@utility mobile-container {
+  @apply px-4 mx-auto max-w-screen-2xl sm:px-6 lg:px-8;
+}
+
+@utility mobile-card {
+  @apply rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03] sm:p-5 lg:p-6;
+}
+
+@utility mobile-spacing {
+  @apply space-y-4 sm:space-y-5 md:space-y-6;
 }
 
 .dark .custom-scrollbar::-webkit-scrollbar-thumb {

@@ -15,7 +15,7 @@ describe('SecurityInterceptor', () => {
         {
           provide: SecurityConfigService,
           useValue: {
-            getAdditionalSecurityHeaders: jest.fn(),
+            getSecurityHeaders: jest.fn(),
           },
         },
       ],
@@ -53,11 +53,16 @@ describe('SecurityInterceptor', () => {
 
       // Mock security config service
       jest
-        .spyOn(securityConfigService, 'getAdditionalSecurityHeaders')
+        .spyOn(securityConfigService, 'getSecurityHeaders')
         .mockReturnValue({
           'X-Content-Type-Options': 'nosniff',
-          'X-Frame-Options': 'DENY',
+          'X-Frame-Options': 'SAMEORIGIN',
           'X-XSS-Protection': '1; mode=block',
+          'Referrer-Policy': 'strict-origin-when-cross-origin',
+          'X-Download-Options': 'noopen',
+          'X-Permitted-Cross-Domain-Policies': 'none',
+          'Cross-Origin-Opener-Policy': 'same-origin',
+          'Cross-Origin-Resource-Policy': 'same-origin',
         });
     });
 
@@ -65,7 +70,7 @@ describe('SecurityInterceptor', () => {
       interceptor.intercept(mockExecutionContext, mockCallHandler).subscribe();
 
       expect(
-        securityConfigService.getAdditionalSecurityHeaders
+        securityConfigService.getSecurityHeaders
       ).toHaveBeenCalled();
       expect(mockResponse.setHeader).toHaveBeenCalledWith(
         'X-Content-Type-Options',

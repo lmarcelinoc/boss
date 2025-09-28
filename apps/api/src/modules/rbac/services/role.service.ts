@@ -4,13 +4,13 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
-import { Role, RoleType, RoleLevel } from '../entities/role.entity';
-import { Permission, PermissionScope } from '../entities/permission.entity';
-import { User } from '../../users/entities/user.entity';
-import { RoleRepository } from '../repositories/role.repository';
-import { UserRepository } from '../repositories/user.repository';
+import { PrismaService } from '../../../database/prisma.service';
+import { Role, RoleType, Permission, User, UserRole } from '@prisma/client';
+import {
+  PermissionAction,
+  PermissionResource,
+  PermissionScope,
+} from '../entities/permission.entity';
 import {
   CreateRoleDto,
   UpdateRoleDto,
@@ -27,10 +27,7 @@ export class RoleService {
   private readonly logger = new Logger(RoleService.name);
 
   constructor(
-    private readonly roleRepository: RoleRepository,
-    @InjectRepository(Permission)
-    private readonly permissionRepository: Repository<Permission>,
-    private readonly userRepository: UserRepository
+    private readonly prisma: PrismaService
   ) {}
 
   async createRole(createRoleDto: CreateRoleDto): Promise<Role> {

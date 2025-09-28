@@ -4,33 +4,32 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { User } from '../entities/user.entity';
+import { User, Prisma } from '@prisma/client';
 import { UserRole, UserStatus } from '@app/shared';
 import { AuditEventType } from '../../audit/entities/audit-log.entity';
 import { EmailService } from '../../email/services/email.service';
 import { AuditService } from '../../audit/services/audit.service';
+import { UserRepository } from '../repositories/user.repository';
 
 export interface UserLifecycleOptions {
   sendEmailVerification?: boolean;
   sendWelcomeEmail?: boolean;
-  auditEvent?: string;
+  auditEvent?: AuditEventType;
 }
 
 export interface UserActivationOptions {
   skipEmailVerification?: boolean;
-  auditEvent?: string;
+  auditEvent?: AuditEventType;
 }
 
 export interface UserSuspensionOptions {
   reason?: string | undefined;
   duration?: number | undefined; // in days, null for indefinite
-  auditEvent?: string | undefined;
+  auditEvent?: AuditEventType | undefined;
 }
 
 export interface UserReactivationOptions {
-  auditEvent?: string;
+  auditEvent?: AuditEventType;
 }
 
 @Injectable()
@@ -38,8 +37,7 @@ export class UserLifecycleService {
   private readonly logger = new Logger(UserLifecycleService.name);
 
   constructor(
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
+    private readonly userRepository: UserRepository,
     private readonly emailService: EmailService,
     private readonly auditService: AuditService
   ) {}
@@ -48,116 +46,124 @@ export class UserLifecycleService {
    * Register a new user with proper lifecycle management
    */
   async registerUser(
-    userData: Partial<User>,
+    userData: Prisma.UserCreateInput,
     options: UserLifecycleOptions = {}
   ): Promise<User> {
+    const { sendEmailVerification = true, sendWelcomeEmail = false, auditEvent } = options;
+
     this.logger.log(`Registering new user: ${userData.email}`);
 
-    // Validate user data
-    this.validateUserRegistrationData(userData);
+    try {
+      // Create the user
+      const user = await this.userRepository.create({
+        ...userData,
+        status: UserStatus.PENDING,
+        emailVerified: !sendEmailVerification,
+        emailVerificationToken: sendEmailVerification ? this.generateToken() : null,
+        emailVerificationTokenExpiresAt: sendEmailVerification ? this.getTokenExpiration() : null,
+      });
 
-    // Check if user already exists
-    const existingUser = await this.userRepository.findOne({
-      where: { email: userData.email!, tenantId: userData.tenantId! },
-    });
+      // Log the registration
+      const auditData: any = {
+        eventType: auditEvent || AuditEventType.USER_CREATED,
+        userId: user.id,
+        description: `User registered: ${user.email}`,
+        metadata: { 
+          sendEmailVerification, 
+          sendWelcomeEmail,
+          authProvider: user.authProvider 
+        },
+      };
+      if (user.tenantId) {
+        auditData.tenantId = user.tenantId;
+      }
+      await this.auditService.logEvent(auditData);
 
-    if (existingUser) {
-      throw new BadRequestException('User already exists with this email');
+      // Send verification email if requested
+      if (sendEmailVerification && user.emailVerificationToken) {
+        try {
+          await this.emailService.sendEmailVerification(user);
+          this.logger.log(`Verification email sent to: ${user.email}`);
+        } catch (error) {
+          this.logger.error(`Failed to send verification email to ${user.email}:`, error);
+          // Don't fail the registration if email fails
+        }
+      }
+
+      // Send welcome email if requested
+      if (sendWelcomeEmail) {
+        try {
+          await this.emailService.sendWelcomeEmail(user);
+          this.logger.log(`Welcome email sent to: ${user.email}`);
+        } catch (error) {
+          this.logger.error(`Failed to send welcome email to ${user.email}:`, error);
+          // Don't fail the registration if email fails
+        }
+      }
+
+      this.logger.log(`Successfully registered user: ${user.id}`);
+      return user;
+
+    } catch (error) {
+      this.logger.error(`Failed to register user ${userData.email}:`, error);
+      throw new BadRequestException('Failed to register user');
     }
-
-    // Create user with proper initial state
-    const user = this.userRepository.create({
-      ...userData,
-      status: UserStatus.PENDING,
-      emailVerified: false,
-    });
-
-    // Generate email verification token if needed
-    if (options.sendEmailVerification !== false) {
-      user.generateEmailVerificationToken();
-    }
-
-    // Save user
-    const savedUser = await this.userRepository.save(user);
-
-    // Send emails
-    await this.sendRegistrationEmails(savedUser, options);
-
-    // Audit the registration
-    await this.auditService.logEvent({
-      eventType: AuditEventType.USER_REGISTERED,
-      userId: savedUser.id,
-      tenantId: savedUser.tenantId,
-      userEmail: savedUser.email,
-      metadata: {
-        email: savedUser.email,
-        role: savedUser.role,
-        status: savedUser.status,
-      },
-    });
-
-    this.logger.log(`User registered successfully: ${savedUser.email}`);
-    return savedUser;
   }
 
   /**
    * Activate a user account
    */
   async activateUser(
-    userId: string,
+    userId: string, 
     options: UserActivationOptions = {}
   ): Promise<User> {
+    const { skipEmailVerification = false, auditEvent } = options;
+
     this.logger.log(`Activating user: ${userId}`);
 
-    const user = await this.findUserById(userId);
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
 
     if (user.status === UserStatus.ACTIVE) {
-      throw new BadRequestException('User is already active');
+      this.logger.warn(`User ${userId} is already active`);
+      return user;
     }
 
-    if (user.status === UserStatus.DELETED) {
-      throw new BadRequestException('Cannot activate a deleted user');
+    try {
+      const updateData: Prisma.UserUpdateInput = {
+        status: UserStatus.ACTIVE,
+        isActive: true,
+        ...(skipEmailVerification && {
+          emailVerified: true,
+          emailVerificationToken: null,
+          emailVerificationTokenExpiresAt: null,
+        }),
+        updatedAt: new Date(),
+      };
+
+      const updatedUser = await this.userRepository.update(userId, updateData);
+
+      // Log the activation
+      const auditData: any = {
+        eventType: auditEvent || AuditEventType.USER_ACTIVATED,
+        userId: user.id,
+        description: `User account activated: ${user.email}`,
+        metadata: { skipEmailVerification },
+      };
+      if (user.tenantId) {
+        auditData.tenantId = user.tenantId;
+      }
+      await this.auditService.logEvent(auditData);
+
+      this.logger.log(`Successfully activated user: ${userId}`);
+      return updatedUser;
+
+    } catch (error) {
+      this.logger.error(`Failed to activate user ${userId}:`, error);
+      throw new BadRequestException('Failed to activate user');
     }
-
-    // Store previous status for audit
-    const previousStatus = user.status;
-
-    // Update user status
-    user.status = UserStatus.ACTIVE;
-
-    // Mark email as verified if not already
-    if (!user.emailVerified && !options.skipEmailVerification) {
-      user.markEmailAsVerified();
-    }
-
-    // Clear any suspension data
-    user.metadata = {
-      ...user.metadata,
-      suspendedAt: null,
-      suspensionReason: null,
-      suspensionExpiresAt: null,
-    };
-
-    const updatedUser = await this.userRepository.save(user);
-
-    // Send activation notification
-    await this.emailService.sendUserActivationNotification(user);
-
-    // Audit the activation
-    await this.auditService.logEvent({
-      eventType: AuditEventType.USER_ACTIVATED,
-      userId: user.id,
-      tenantId: user.tenantId,
-      userEmail: user.email,
-      metadata: {
-        previousStatus: previousStatus,
-        newStatus: UserStatus.ACTIVE,
-        emailVerified: user.emailVerified,
-      },
-    });
-
-    this.logger.log(`User activated successfully: ${user.email}`);
-    return updatedUser;
   }
 
   /**
@@ -167,312 +173,343 @@ export class UserLifecycleService {
     userId: string,
     options: UserSuspensionOptions = {}
   ): Promise<User> {
+    const { reason, duration, auditEvent } = options;
+
     this.logger.log(`Suspending user: ${userId}`);
 
-    const user = await this.findUserById(userId);
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
 
     if (user.status === UserStatus.SUSPENDED) {
-      throw new BadRequestException('User is already suspended');
+      this.logger.warn(`User ${userId} is already suspended`);
+      return user;
     }
 
-    if (user.status === UserStatus.DELETED) {
-      throw new BadRequestException('Cannot suspend a deleted user');
+    try {
+      const suspensionExpiresAt = duration 
+        ? new Date(Date.now() + duration * 24 * 60 * 60 * 1000)
+        : null;
+
+      const metadata = {
+        suspendedAt: new Date().toISOString(),
+        suspensionReason: reason,
+        ...(suspensionExpiresAt && { suspensionExpiresAt: suspensionExpiresAt.toISOString() }),
+      };
+
+      const updateData: Prisma.UserUpdateInput = {
+        status: UserStatus.SUSPENDED,
+        isActive: false,
+        metadata: metadata as any,
+        updatedAt: new Date(),
+      };
+
+      const updatedUser = await this.userRepository.update(userId, updateData);
+
+      // Log the suspension
+      const auditData: any = {
+        eventType: auditEvent || AuditEventType.USER_SUSPENDED,
+        userId: user.id,
+        description: `User account suspended: ${user.email}`,
+        metadata: { reason, duration, suspensionExpiresAt },
+      };
+      if (user.tenantId) {
+        auditData.tenantId = user.tenantId;
+      }
+      await this.auditService.logEvent(auditData);
+
+      this.logger.log(`Successfully suspended user: ${userId}`);
+      return updatedUser;
+
+    } catch (error) {
+      this.logger.error(`Failed to suspend user ${userId}:`, error);
+      throw new BadRequestException('Failed to suspend user');
     }
-
-    if (user.role === UserRole.OWNER) {
-      throw new BadRequestException('Cannot suspend tenant owner');
-    }
-
-    // Store previous status for audit
-    const previousStatus = user.status;
-
-    // Update user status
-    user.status = UserStatus.SUSPENDED;
-
-    // Store suspension metadata
-    const suspensionData = {
-      suspendedAt: new Date(),
-      suspensionReason: options.reason || 'Administrative suspension',
-      suspensionExpiresAt: options.duration
-        ? new Date(Date.now() + options.duration * 24 * 60 * 60 * 1000)
-        : null,
-    };
-
-    user.metadata = {
-      ...user.metadata,
-      ...suspensionData,
-    };
-
-    const updatedUser = await this.userRepository.save(user);
-
-    // Send suspension notification
-    const emailSuspensionData = {
-      suspendedAt: suspensionData.suspendedAt,
-      suspensionReason: suspensionData.suspensionReason,
-      ...(suspensionData.suspensionExpiresAt && {
-        suspensionExpiresAt: suspensionData.suspensionExpiresAt,
-      }),
-    };
-    await this.emailService.sendUserSuspensionNotification(
-      user,
-      emailSuspensionData
-    );
-
-    // Audit the suspension
-    await this.auditService.logEvent({
-      eventType: AuditEventType.USER_SUSPENDED,
-      userId: user.id,
-      tenantId: user.tenantId,
-      userEmail: user.email,
-      metadata: {
-        previousStatus: previousStatus,
-        newStatus: UserStatus.SUSPENDED,
-        reason: options.reason,
-        duration: options.duration,
-        expiresAt: suspensionData.suspensionExpiresAt,
-      },
-    });
-
-    this.logger.log(`User suspended successfully: ${user.email}`);
-    return updatedUser;
   }
 
   /**
-   * Reactivate a suspended user
+   * Reactivate a suspended user account
    */
   async reactivateUser(
     userId: string,
     options: UserReactivationOptions = {}
   ): Promise<User> {
+    const { auditEvent } = options;
+
     this.logger.log(`Reactivating user: ${userId}`);
 
-    const user = await this.findUserById(userId);
-
-    if (user.status !== UserStatus.SUSPENDED) {
-      throw new BadRequestException('User is not suspended');
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
     }
 
-    // Update user status
-    user.status = UserStatus.ACTIVE;
+    if (user.status === UserStatus.ACTIVE) {
+      this.logger.warn(`User ${userId} is already active`);
+      return user;
+    }
 
-    // Clear suspension metadata
-    user.metadata = {
-      ...user.metadata,
-      suspendedAt: null,
-      suspensionReason: null,
-      suspensionExpiresAt: null,
-    };
+    try {
+      // Clear suspension metadata
+      const currentMetadata = (user.metadata as any) || {};
+      const {
+        suspendedAt,
+        suspensionReason,
+        suspensionExpiresAt,
+        ...cleanMetadata
+      } = currentMetadata;
 
-    const updatedUser = await this.userRepository.save(user);
+      const updateData: Prisma.UserUpdateInput = {
+        status: UserStatus.ACTIVE,
+        isActive: true,
+        metadata: cleanMetadata as any,
+        updatedAt: new Date(),
+      };
 
-    // Send reactivation notification
-    await this.emailService.sendUserReactivationNotification(user);
+      const updatedUser = await this.userRepository.update(userId, updateData);
 
-    // Audit the reactivation
-    await this.auditService.logEvent({
-      eventType: AuditEventType.USER_REACTIVATED,
-      userId: user.id,
-      tenantId: user.tenantId,
-      userEmail: user.email,
-      metadata: {
-        previousStatus: UserStatus.SUSPENDED,
-        newStatus: UserStatus.ACTIVE,
-      },
-    });
+      // Log the reactivation
+      const auditData: any = {
+        eventType: auditEvent || AuditEventType.USER_REACTIVATED,
+        userId: user.id,
+        description: `User account reactivated: ${user.email}`,
+        metadata: { previousStatus: user.status },
+      };
+      if (user.tenantId) {
+        auditData.tenantId = user.tenantId;
+      }
+      await this.auditService.logEvent(auditData);
 
-    this.logger.log(`User reactivated successfully: ${user.email}`);
-    return updatedUser;
+      this.logger.log(`Successfully reactivated user: ${userId}`);
+      return updatedUser;
+
+    } catch (error) {
+      this.logger.error(`Failed to reactivate user ${userId}:`, error);
+      throw new BadRequestException('Failed to reactivate user');
+    }
   }
 
   /**
-   * Soft delete a user account
+   * Verify user email address
    */
-  async deleteUser(userId: string, auditEvent?: string): Promise<void> {
-    this.logger.log(`Deleting user: ${userId}`);
+  async verifyEmail(token: string): Promise<User> {
+    this.logger.log(`Verifying email with token: ${token}`);
 
-    const user = await this.findUserById(userId);
-
-    if (user.role === UserRole.OWNER) {
-      throw new BadRequestException('Cannot delete tenant owner');
-    }
-
-    // Soft delete the user
-    await this.userRepository.softDelete(userId);
-
-    // Send deletion notification
-    await this.emailService.sendUserDeletionNotification(user);
-
-    // Audit the deletion
-    await this.auditService.logEvent({
-      eventType: AuditEventType.USER_DELETED,
-      userId: user.id,
-      tenantId: user.tenantId,
-      userEmail: user.email,
-      metadata: {
-        previousStatus: user.status,
-        email: user.email,
-        role: user.role,
+    const users = await this.userRepository.findMany({
+      where: {
+        emailVerificationToken: token,
+        emailVerificationTokenExpiresAt: {
+          gte: new Date(),
+        },
       },
+      take: 1,
     });
 
-    this.logger.log(`User deleted successfully: ${user.email}`);
+    if (!users.length) {
+      throw new BadRequestException('Invalid or expired verification token');
+    }
+
+    const currentUser = users[0];
+
+    if (!currentUser) {
+      throw new BadRequestException('User not found');
+    }
+
+    try {
+      const updatedUser = await this.userRepository.update(currentUser.id, {
+        emailVerified: true,
+        emailVerificationToken: null,
+        emailVerificationTokenExpiresAt: null,
+        emailVerifiedAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      // Log the email verification
+      const auditData: any = {
+        eventType: AuditEventType.EMAIL_VERIFIED,
+        userId: currentUser.id,
+        description: `Email verified: ${currentUser.email}`,
+      };
+      if (currentUser.tenantId) {
+        auditData.tenantId = currentUser.tenantId;
+      }
+      await this.auditService.logEvent(auditData);
+
+      this.logger.log(`Successfully verified email for user: ${currentUser.id}`);
+      return updatedUser;
+
+    } catch (error) {
+      this.logger.error(`Failed to verify email for user ${currentUser.id}:`, error);
+      throw new BadRequestException('Failed to verify email');
+    }
+  }
+
+  /**
+   * Generate a random token
+   */
+  private generateToken(): string {
+    return Math.random().toString(36).substring(2, 15) + 
+           Math.random().toString(36).substring(2, 15);
+  }
+
+  /**
+   * Get token expiration date (24 hours from now)
+   */
+  private getTokenExpiration(): Date {
+    return new Date(Date.now() + 24 * 60 * 60 * 1000);
+  }
+
+  /**
+   * Check if user can be activated
+   */
+  async canActivateUser(userId: string): Promise<boolean> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      return false;
+    }
+
+    return user.status === UserStatus.PENDING || user.status === UserStatus.SUSPENDED;
+  }
+
+  /**
+   * Check if user can be suspended
+   */
+  async canSuspendUser(userId: string): Promise<boolean> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      return false;
+    }
+
+    return user.status === UserStatus.ACTIVE;
+  }
+
+  /**
+   * Get user lifecycle status
+   */
+  async getUserLifecycleStatus(userId: string): Promise<{
+    status: string;
+    canActivate: boolean;
+    canSuspend: boolean;
+    canReactivate: boolean;
+    emailVerified: boolean;
+    suspensionExpiry?: Date;
+  }> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const metadata = (user.metadata as any) || {};
+    const suspensionExpiry = metadata.suspensionExpiresAt 
+      ? new Date(metadata.suspensionExpiresAt)
+      : undefined;
+
+    return {
+      status: user.status,
+      canActivate: await this.canActivateUser(userId),
+      canSuspend: await this.canSuspendUser(userId),
+      canReactivate: user.status === UserStatus.SUSPENDED,
+      emailVerified: user.emailVerified,
+      suspensionExpiry,
+    };
+  }
+
+  /**
+   * Check and reactivate users with expired suspensions
+   */
+  async checkAndReactivateExpiredSuspensions(): Promise<{ reactivatedUsers: number }> {
+    this.logger.log('Checking for expired user suspensions...');
+
+    try {
+      // Find all suspended users
+      const suspendedUsers = await this.userRepository.findByStatus(UserStatus.SUSPENDED);
+      let reactivatedCount = 0;
+
+      for (const user of suspendedUsers) {
+        const metadata = (user.metadata as any) || {};
+        const suspensionExpiresAt = metadata.suspensionExpiresAt 
+          ? new Date(metadata.suspensionExpiresAt)
+          : null;
+
+        // If suspension has expired, reactivate the user
+        if (suspensionExpiresAt && suspensionExpiresAt <= new Date()) {
+          await this.reactivateUser(user.id, {
+            auditEvent: AuditEventType.USER_REACTIVATED
+          });
+          reactivatedCount++;
+        }
+      }
+
+      this.logger.log(`Reactivated ${reactivatedCount} users with expired suspensions`);
+      return { reactivatedUsers: reactivatedCount };
+
+    } catch (error) {
+      this.logger.error('Error checking expired suspensions:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete user (soft delete by setting status to DELETED)
+   */
+  async deleteUser(userId: string): Promise<void> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Soft delete by setting status to DELETED
+    await this.userRepository.update(userId, { 
+      status: 'deleted',
+      // deletedAt: new Date() // TODO: Add deletedAt field to User model if needed
+    });
+
+    // Log the deletion
+    const auditData: any = {
+      eventType: AuditEventType.USER_DELETED,
+      userId: user.id,
+      description: `User account deleted: ${user.email}`,
+    };
+    if (user.tenantId) {
+      auditData.tenantId = user.tenantId;
+    }
+    await this.auditService.logEvent(auditData);
+
+    this.logger.log(`User deleted: ${userId}`);
   }
 
   /**
    * Get user lifecycle information
    */
   async getUserLifecycleInfo(userId: string): Promise<{
-    user: User;
-    isActive: boolean;
-    isSuspended: boolean;
-    isDeleted: boolean;
-    suspensionInfo?: {
-      suspendedAt: Date;
-      reason: string;
-      expiresAt?: Date;
-      isExpired: boolean;
-    };
+    status: string;
+    canActivate: boolean;
+    canSuspend: boolean;
+    canReactivate: boolean;
+    emailVerified: boolean;
+    suspensionExpiry?: Date;
   }> {
-    const user = await this.findUserById(userId);
-
-    const isActive = user.status === UserStatus.ACTIVE;
-    const isSuspended = user.status === UserStatus.SUSPENDED;
-    const isDeleted = user.status === UserStatus.DELETED;
-
-    let suspensionInfo;
-    if (isSuspended && user.metadata?.suspendedAt) {
-      const now = new Date();
-      const expiresAt = user.metadata.suspensionExpiresAt
-        ? new Date(user.metadata.suspensionExpiresAt)
-        : null;
-
-      const suspensionInfoData: {
-        suspendedAt: Date;
-        reason: string;
-        isExpired: boolean;
-        expiresAt?: Date;
-      } = {
-        suspendedAt: new Date(user.metadata.suspendedAt),
-        reason: user.metadata.suspensionReason || 'No reason provided',
-        isExpired: expiresAt ? now > expiresAt : false,
-      };
-
-      if (expiresAt) {
-        suspensionInfoData.expiresAt = expiresAt;
-      }
-
-      suspensionInfo = suspensionInfoData;
-    }
-
-    const result: {
-      user: User;
-      isActive: boolean;
-      isSuspended: boolean;
-      isDeleted: boolean;
-      suspensionInfo?: {
-        suspendedAt: Date;
-        reason: string;
-        expiresAt?: Date;
-        isExpired: boolean;
-      };
-    } = {
-      user,
-      isActive,
-      isSuspended,
-      isDeleted,
-    };
-
-    if (suspensionInfo) {
-      result.suspensionInfo = suspensionInfo;
-    }
-
-    return result;
-  }
-
-  /**
-   * Check and auto-reactivate expired suspensions
-   */
-  async checkAndReactivateExpiredSuspensions(): Promise<number> {
-    this.logger.log('Checking for expired user suspensions');
-
-    const suspendedUsers = await this.userRepository.find({
-      where: { status: UserStatus.SUSPENDED },
-    });
-
-    let reactivatedCount = 0;
-
-    for (const user of suspendedUsers) {
-      if (user.metadata?.suspensionExpiresAt) {
-        const expiresAt = new Date(user.metadata.suspensionExpiresAt);
-        if (new Date() > expiresAt) {
-          await this.reactivateUser(user.id, {
-            auditEvent: 'user.auto_reactivated',
-          });
-          reactivatedCount++;
-        }
-      }
-    }
-
-    this.logger.log(`Auto-reactivated ${reactivatedCount} expired suspensions`);
-    return reactivatedCount;
-  }
-
-  /**
-   * Find user by ID with proper error handling
-   */
-  private async findUserById(userId: string): Promise<User> {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-    });
-
+    const user = await this.userRepository.findById(userId);
     if (!user) {
-      throw new NotFoundException(`User with ID ${userId} not found`);
+      throw new NotFoundException('User not found');
     }
 
-    return user;
-  }
-
-  /**
-   * Validate user registration data
-   */
-  private validateUserRegistrationData(userData: Partial<User>): void {
-    if (!userData.email) {
-      throw new BadRequestException('Email is required');
+    // Get suspension expiry if user is suspended
+    let suspensionExpiry: Date | null = null;
+    if (user.status === UserStatus.SUSPENDED) {
+      const metadata = (user.metadata as any) || {};
+      suspensionExpiry = metadata.suspensionExpiresAt 
+        ? new Date(metadata.suspensionExpiresAt)
+        : null;
     }
 
-    if (!userData.firstName) {
-      throw new BadRequestException('First name is required');
-    }
-
-    if (!userData.lastName) {
-      throw new BadRequestException('Last name is required');
-    }
-
-    if (!userData.tenantId) {
-      throw new BadRequestException('Tenant ID is required');
-    }
-  }
-
-  /**
-   * Send registration-related emails
-   */
-  private async sendRegistrationEmails(
-    user: User,
-    options: UserLifecycleOptions
-  ): Promise<void> {
-    try {
-      if (options.sendEmailVerification !== false) {
-        await this.emailService.sendEmailVerification(user);
-      }
-
-      if (options.sendWelcomeEmail) {
-        await this.emailService.sendWelcomeEmail(user);
-      }
-    } catch (error: any) {
-      this.logger.error(
-        `Failed to send registration emails: ${error.message || 'Unknown error'}`
-      );
-      // Don't throw error to avoid failing registration
-    }
+    return {
+      status: user.status,
+      canActivate: await this.canActivateUser(userId),
+      canSuspend: await this.canSuspendUser(userId),
+      canReactivate: user.status === UserStatus.SUSPENDED,
+      emailVerified: user.emailVerified,
+      ...(suspensionExpiry && { suspensionExpiry }),
+    };
   }
 }

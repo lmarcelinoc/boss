@@ -6,25 +6,14 @@ import {
   Logger,
 } from '@nestjs/common';
 import { validate as validateUUID } from 'uuid';
-import { InjectRepository } from '@nestjs/typeorm';
-import {
-  Repository,
-  Like,
-  In,
-  Between,
-  IsNull,
-  Not,
-  DataSource,
-} from 'typeorm';
-import { Tenant } from '../entities/tenant.entity';
-import {
-  TenantUsage,
-  TenantUsageMetric,
-} from '../entities/tenant-usage.entity';
-import {
-  TenantFeatureFlag,
-  TenantFeature,
-} from '../entities/tenant-feature-flag.entity';
+import { PrismaService } from '../../../database/prisma.service';
+import { 
+  Tenant, 
+  TenantUsage, 
+  TenantUsageMetric, 
+  TenantFeatureFlag, 
+  TenantFeature 
+} from '@prisma/client';
 import { CreateTenantDto, UpdateTenantDto, TenantQueryDto } from '../dto';
 
 export interface TenantStatistics {
@@ -51,13 +40,7 @@ export class TenantService {
   private readonly logger = new Logger(TenantService.name);
 
   constructor(
-    @InjectRepository(Tenant)
-    private readonly tenantRepository: Repository<Tenant>,
-    @InjectRepository(TenantUsage)
-    private readonly tenantUsageRepository: Repository<TenantUsage>,
-    @InjectRepository(TenantFeatureFlag)
-    private readonly tenantFeatureFlagRepository: Repository<TenantFeatureFlag>,
-    private readonly dataSource: DataSource
+    private readonly prisma: PrismaService
   ) {}
 
   /**
@@ -66,9 +49,12 @@ export class TenantService {
   async createTenant(createTenantDto: CreateTenantDto): Promise<Tenant> {
     this.logger.log(`Creating new tenant: ${createTenantDto.name}`);
 
-    // Check for name uniqueness (excluding soft-deleted tenants)
-    const existingTenantByName = await this.tenantRepository.findOne({
-      where: { name: createTenantDto.name, deletedAt: IsNull() },
+    // Check for name uniqueness
+    const existingTenantByName = await this.prisma.tenant.findFirst({
+      where: { 
+        name: createTenantDto.name,
+        isActive: true // Only check active tenants for uniqueness
+      },
     });
 
     if (existingTenantByName) {
@@ -77,10 +63,13 @@ export class TenantService {
       );
     }
 
-    // Check for domain uniqueness if provided (excluding soft-deleted tenants)
+    // Check for domain uniqueness if provided
     if (createTenantDto.domain) {
-      const existingTenantByDomain = await this.tenantRepository.findOne({
-        where: { domain: createTenantDto.domain, deletedAt: IsNull() },
+      const existingTenantByDomain = await this.prisma.tenant.findFirst({
+        where: { 
+          domain: createTenantDto.domain,
+          isActive: true // Only check active tenants for uniqueness
+        },
       });
 
       if (existingTenantByDomain) {
@@ -90,430 +79,414 @@ export class TenantService {
       }
     }
 
-    // Use transaction to ensure data consistency
-    return await this.dataSource.transaction(async manager => {
-      // Create tenant
-      const tenant = manager.create(Tenant, {
-        ...createTenantDto,
-        isActive: createTenantDto.isActive ?? true,
-        plan: createTenantDto.plan ?? 'free',
-        maxUsers: createTenantDto.maxUsers ?? 0,
-        maxStorage: createTenantDto.maxStorage ?? 0,
-        features: createTenantDto.features ?? [],
-        settings: createTenantDto.settings ?? {},
-        metadata: createTenantDto.metadata ?? {},
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // Create the tenant
+        const tenant = await tx.tenant.create({
+          data: {
+            name: createTenantDto.name,
+            domain: createTenantDto.domain || null,
+            slug: createTenantDto.slug || createTenantDto.name.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+            settings: createTenantDto.settings || {},
+            logoUrl: createTenantDto.logoUrl || null,
+            isActive: true,
+          },
+        });
+
+        // Initialize tenant usage tracking
+        await this.initializeTenantUsage(tenant.id, tx);
+
+        // Set up default feature flags
+        await this.initializeDefaultFeatureFlags(tenant.id, tx);
+
+        this.logger.log(`Successfully created tenant: ${tenant.id}`);
+        return tenant;
       });
-
-      let savedTenant: Tenant;
-      try {
-        savedTenant = await manager.save(Tenant, tenant);
-      } catch (error: any) {
-        // Handle database constraint violations
-        if (error.code === '23505') {
-          // Unique violation
-          if (error.constraint?.includes('name')) {
-            throw new ConflictException(
-              `Tenant with name "${createTenantDto.name}" already exists`
-            );
-          } else if (error.constraint?.includes('domain')) {
-            throw new ConflictException(
-              `Tenant with domain "${createTenantDto.domain}" already exists`
-            );
-          } else {
-            throw new ConflictException(
-              'Tenant with this name or domain already exists'
-            );
-          }
-        }
-        throw error; // Re-throw other errors
-      }
-
-      // Initialize default feature flags
-      await this.initializeDefaultFeatureFlagsWithManager(
-        savedTenant.id,
-        manager
-      );
-
-      this.logger.log(`Tenant created successfully: ${savedTenant.id}`);
-      return savedTenant;
-    });
+    } catch (error) {
+      this.logger.error(`Failed to create tenant ${createTenantDto.name}:`, error);
+      throw new BadRequestException('Failed to create tenant');
+    }
   }
 
   /**
-   * Get all tenants with filtering and pagination
+   * Find all tenants with optional filtering
    */
-  async getTenants(
-    query: TenantQueryDto
-  ): Promise<{ tenants: Tenant[]; total: number }> {
+  async findAllTenants(query: TenantQueryDto): Promise<{
+    tenants: Tenant[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     const {
+      page = 1,
+      limit = 10,
       search,
-      plan,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
       isActive,
-      isVerified,
-      isInTrial,
-      sortBy,
-      sortOrder,
-      page,
-      limit,
-      includeDeleted,
     } = query;
 
-    const queryBuilder = this.tenantRepository.createQueryBuilder('tenant');
+    const skip = (page - 1) * limit;
 
-    // Apply filters
+    // Build where conditions
+    const where: any = {};
+    
     if (search) {
-      queryBuilder.andWhere(
-        '(tenant.name ILIKE :search OR tenant.domain ILIKE :search)',
-        { search: `%${search}%` }
-      );
-    }
-
-    if (plan) {
-      queryBuilder.andWhere('tenant.plan = :plan', { plan });
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { domain: { contains: search, mode: 'insensitive' } },
+        { slug: { contains: search, mode: 'insensitive' } },
+      ];
     }
 
     if (isActive !== undefined) {
-      queryBuilder.andWhere('tenant.isActive = :isActive', { isActive });
+      where.isActive = isActive;
     }
 
-    if (isVerified !== undefined) {
-      queryBuilder.andWhere('tenant.isVerified = :isVerified', { isVerified });
-    }
+    // Get total count
+    const total = await this.prisma.tenant.count({ where });
 
-    if (isInTrial !== undefined) {
-      if (isInTrial) {
-        queryBuilder.andWhere('tenant.trialEndsAt > :now', { now: new Date() });
-      } else {
-        queryBuilder.andWhere(
-          '(tenant.trialEndsAt IS NULL OR tenant.trialEndsAt <= :now)',
-          { now: new Date() }
-        );
+    // Get tenants
+    const tenants = await this.prisma.tenant.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { [sortBy]: sortOrder },
+      include: {
+        users: {
+          select: { id: true, isActive: true }
+        },
+        subscriptions: {
+          select: { id: true, status: true }
+        }
       }
-    }
-
-    // Handle soft deleted records
-    if (!includeDeleted) {
-      queryBuilder.andWhere('tenant.deletedAt IS NULL');
-    }
-
-    // Apply sorting
-    queryBuilder.orderBy(`tenant.${sortBy}`, sortOrder);
-
-    // Apply safe pagination
-    const safeLimit = Math.min(Math.max(1, limit ?? 10), 100);
-    const safePage = Math.max(1, page ?? 1);
-    const offset = (safePage - 1) * safeLimit;
-    queryBuilder.skip(offset).take(safeLimit);
-
-    // Execute query
-    const [tenants, total] = await queryBuilder.getManyAndCount();
-
-    return { tenants, total };
-  }
-
-  /**
-   * Get tenant by ID
-   */
-  async getTenantById(id: string): Promise<Tenant> {
-    if (!validateUUID(id)) {
-      throw new BadRequestException(`Invalid tenant ID format: "${id}"`);
-    }
-
-    try {
-      const tenant = await this.tenantRepository.findOne({
-        where: { id },
-        relations: ['users'],
-      });
-
-      if (!tenant) {
-        throw new NotFoundException(`Tenant with ID "${id}" not found`);
-      }
-
-      return tenant;
-    } catch (error: any) {
-      this.logger.error(`Failed to get tenant ${id}:`, error);
-
-      // Handle TypeORM relationship errors
-      if (error.message?.includes('joinColumns')) {
-        this.logger.error('TypeORM relationship error in getTenantById');
-        throw new BadRequestException(
-          'Invalid entity relationship configuration'
-        );
-      }
-
-      throw error;
-    }
-  }
-
-  /**
-   * Get tenant by domain
-   */
-  async getTenantByDomain(domain: string): Promise<Tenant> {
-    const tenant = await this.tenantRepository.findOne({
-      where: { domain },
     });
 
-    if (!tenant) {
-      throw new NotFoundException(`Tenant with domain "${domain}" not found`);
-    }
+    const totalPages = Math.ceil(total / limit);
 
-    return tenant;
+    return {
+      tenants,
+      total,
+      page,
+      limit,
+      totalPages,
+    };
   }
 
   /**
-   * Get tenant by ID without relations (for update operations)
+   * Find tenant by ID
    */
-  async getTenantByIdWithoutRelations(id: string): Promise<Tenant> {
+  async findTenantById(id: string): Promise<Tenant | null> {
     if (!validateUUID(id)) {
-      throw new BadRequestException(`Invalid tenant ID format: "${id}"`);
+      throw new BadRequestException('Invalid tenant ID format');
     }
 
-    try {
-      const tenant = await this.tenantRepository.findOne({
-        where: { id },
-      });
-
-      if (!tenant) {
-        throw new NotFoundException(`Tenant with ID "${id}" not found`);
+    return this.prisma.tenant.findFirst({
+      where: { 
+        id,
+        isActive: true 
+      },
+      include: {
+        users: {
+          select: { 
+            id: true, 
+            email: true, 
+            firstName: true, 
+            lastName: true, 
+            isActive: true,
+            status: true 
+          }
+        },
+        subscriptions: true,
+        tenantFeatureFlags: true,
+        tenantUsage: true
       }
+    });
+  }
 
-      return tenant;
-    } catch (error: any) {
-      this.logger.error(`Failed to get tenant ${id}:`, error);
-      throw error;
-    }
+  /**
+   * Find tenant by domain
+   */
+  async findTenantByDomain(domain: string): Promise<Tenant | null> {
+    return this.prisma.tenant.findFirst({
+      where: { 
+        domain,
+        isActive: true 
+      },
+    });
+  }
+
+  /**
+   * Find tenant by slug
+   */
+  async findTenantBySlug(slug: string): Promise<Tenant | null> {
+    return this.prisma.tenant.findFirst({
+      where: { 
+        slug,
+        isActive: true 
+      },
+    });
   }
 
   /**
    * Update tenant
    */
-  async updateTenant(
-    id: string,
-    updateTenantDto: UpdateTenantDto
-  ): Promise<Tenant> {
-    this.logger.log(`Updating tenant: ${id}`);
-
+  async updateTenant(id: string, updateTenantDto: UpdateTenantDto): Promise<Tenant> {
     if (!validateUUID(id)) {
-      throw new BadRequestException(`Invalid tenant ID format: "${id}"`);
+      throw new BadRequestException('Invalid tenant ID format');
     }
 
-    const tenant = await this.getTenantByIdWithoutRelations(id);
+    // Check if tenant exists
+    const existingTenant = await this.findTenantById(id);
+    if (!existingTenant) {
+      throw new NotFoundException('Tenant not found');
+    }
 
-    // Check for name uniqueness if name is being updated (excluding soft-deleted tenants)
-    if (updateTenantDto.name && updateTenantDto.name !== tenant.name) {
-      const existingTenant = await this.tenantRepository.findOne({
-        where: { name: updateTenantDto.name, deletedAt: IsNull() },
+    // Check for name uniqueness if name is being updated
+    if (updateTenantDto.name && updateTenantDto.name !== existingTenant.name) {
+      const existingTenantByName = await this.prisma.tenant.findFirst({
+        where: { 
+          name: updateTenantDto.name,
+          isActive: true,
+          id: { not: id }
+        },
       });
 
-      if (existingTenant) {
+      if (existingTenantByName) {
         throw new ConflictException(
           `Tenant with name "${updateTenantDto.name}" already exists`
         );
       }
     }
 
-    // Check for domain uniqueness if domain is being updated (excluding soft-deleted tenants)
-    if (updateTenantDto.domain && updateTenantDto.domain !== tenant.domain) {
-      const existingTenant = await this.tenantRepository.findOne({
-        where: { domain: updateTenantDto.domain, deletedAt: IsNull() },
+    // Check for domain uniqueness if domain is being updated
+    if (updateTenantDto.domain && updateTenantDto.domain !== existingTenant.domain) {
+      const existingTenantByDomain = await this.prisma.tenant.findFirst({
+        where: { 
+          domain: updateTenantDto.domain,
+          isActive: true,
+          id: { not: id }
+        },
       });
 
-      if (existingTenant) {
+      if (existingTenantByDomain) {
         throw new ConflictException(
           `Tenant with domain "${updateTenantDto.domain}" already exists`
         );
       }
     }
 
-    // Update tenant
-    Object.assign(tenant, updateTenantDto);
-
-    let updatedTenant: Tenant;
     try {
-      updatedTenant = await this.tenantRepository.save(tenant);
-    } catch (error: any) {
+      const updatedTenant = await this.prisma.tenant.update({
+        where: { id },
+        data: {
+          ...(updateTenantDto.name && { name: updateTenantDto.name }),
+          ...(updateTenantDto.domain !== undefined && { domain: updateTenantDto.domain }),
+          ...(updateTenantDto.slug && { slug: updateTenantDto.slug }),
+          ...(updateTenantDto.settings && { settings: updateTenantDto.settings }),
+          ...(updateTenantDto.logoUrl !== undefined && { logoUrl: updateTenantDto.logoUrl }),
+          updatedAt: new Date(),
+        },
+      });
+
+      this.logger.log(`Successfully updated tenant: ${id}`);
+      return updatedTenant;
+    } catch (error) {
       this.logger.error(`Failed to update tenant ${id}:`, error);
+      throw new BadRequestException('Failed to update tenant');
+    }
+  }
 
-      // Handle database constraint violations
-      if (error.code === '23505') {
-        // Unique violation
-        if (error.constraint?.includes('name')) {
-          throw new ConflictException(
-            `Tenant with name "${updateTenantDto.name}" already exists`
-          );
-        } else if (error.constraint?.includes('domain')) {
-          throw new ConflictException(
-            `Tenant with domain "${updateTenantDto.domain}" already exists`
-          );
-        } else {
-          throw new ConflictException(
-            'Tenant with this name or domain already exists'
-          );
-        }
-      }
-
-      // Handle TypeORM relationship errors
-      if (error.message?.includes('joinColumns')) {
-        this.logger.error('TypeORM relationship error detected');
-        throw new BadRequestException(
-          'Invalid entity relationship configuration'
-        );
-      }
-
-      throw error; // Re-throw other errors
+  /**
+   * Soft delete tenant
+   */
+  async deleteTenant(id: string): Promise<void> {
+    if (!validateUUID(id)) {
+      throw new BadRequestException('Invalid tenant ID format');
     }
 
-    this.logger.log(`Tenant updated successfully: ${id}`);
+    const tenant = await this.findTenantById(id);
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    // Check if tenant has active users
+    const activeUserCount = await this.prisma.user.count({
+      where: {
+        tenantId: id,
+        isActive: true
+      }
+    });
+
+    if (activeUserCount > 0) {
+      throw new BadRequestException(
+        `Cannot delete tenant with ${activeUserCount} active users. Deactivate users first.`
+      );
+    }
+
+    try {
+      await this.prisma.tenant.update({
+        where: { id },
+        data: { 
+          isActive: false,
+          updatedAt: new Date()
+        }
+      });
+
+      this.logger.log(`Successfully deleted tenant: ${id}`);
+    } catch (error) {
+      this.logger.error(`Failed to delete tenant ${id}:`, error);
+      throw new BadRequestException('Failed to delete tenant');
+    }
+  }
+
+  /**
+   * Verify tenant (admin operation)
+   */
+  async verifyTenant(id: string): Promise<Tenant> {
+    if (!validateUUID(id)) {
+      throw new BadRequestException('Invalid tenant ID format');
+    }
+
+    const tenant = await this.findTenantById(id);
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    const updatedTenant = await this.prisma.tenant.update({
+      where: { id },
+      data: {
+        // Assuming there would be verification fields in settings
+        settings: {
+          ...((tenant.settings as any) || {}),
+          isVerified: true,
+          verifiedAt: new Date().toISOString()
+        },
+        updatedAt: new Date()
+      }
+    });
+
+    this.logger.log(`Successfully verified tenant: ${id}`);
     return updatedTenant;
   }
 
   /**
-   * Delete tenant (soft delete)
-   */
-  async deleteTenant(id: string): Promise<void> {
-    this.logger.log(`Deleting tenant: ${id}`);
-
-    const tenant = await this.getTenantById(id);
-
-    // Check if tenant has active users
-    if (tenant.users && tenant.users.length > 0) {
-      const activeUsers = tenant.users.filter(user => user.isActive);
-      if (activeUsers.length > 0) {
-        throw new BadRequestException(
-          `Cannot delete tenant with ${activeUsers.length} active users`
-        );
-      }
-    }
-
-    await this.tenantRepository.softDelete(id);
-    this.logger.log(`Tenant deleted successfully: ${id}`);
-  }
-
-  /**
-   * Restore soft deleted tenant
-   */
-  async restoreTenant(id: string): Promise<Tenant> {
-    this.logger.log(`Restoring tenant: ${id}`);
-
-    const result = await this.tenantRepository.restore(id);
-    if (result.affected === 0) {
-      throw new NotFoundException(
-        `Tenant with ID "${id}" not found or not deleted`
-      );
-    }
-
-    const tenant = await this.getTenantById(id);
-    this.logger.log(`Tenant restored successfully: ${id}`);
-    return tenant;
-  }
-
-  /**
-   * Verify tenant
-   */
-  async verifyTenant(id: string): Promise<Tenant> {
-    this.logger.log(`Verifying tenant: ${id}`);
-
-    const tenant = await this.getTenantById(id);
-    tenant.isVerified = true;
-    tenant.verifiedAt = new Date();
-
-    const verifiedTenant = await this.tenantRepository.save(tenant);
-    this.logger.log(`Tenant verified successfully: ${id}`);
-    return verifiedTenant;
-  }
-
-  /**
-   * Get tenant statistics
+   * Get tenant statistics (admin dashboard)
    */
   async getTenantStatistics(): Promise<TenantStatistics> {
     const [
       totalTenants,
       activeTenants,
-      trialTenants,
-      verifiedTenants,
-      tenantsByPlan,
-      recentTenants,
+      // Note: trial and verified would need additional schema fields
     ] = await Promise.all([
-      this.tenantRepository.count({ where: { deletedAt: IsNull() } }),
-      this.tenantRepository.count({
-        where: { isActive: true, deletedAt: IsNull() },
-      }),
-      this.tenantRepository.count({
-        where: {
-          trialEndsAt: Not(IsNull()),
-          deletedAt: IsNull(),
-        },
-      }),
-      this.tenantRepository.count({
-        where: { isVerified: true, deletedAt: IsNull() },
-      }),
-      this.tenantRepository
-        .createQueryBuilder('tenant')
-        .select('tenant.plan', 'plan')
-        .addSelect('COUNT(*)', 'count')
-        .where('tenant.deletedAt IS NULL')
-        .groupBy('tenant.plan')
-        .getRawMany(),
-      this.tenantRepository.count({
-        where: {
-          createdAt: Between(
-            new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days ago
-            new Date()
-          ),
-          deletedAt: IsNull(),
-        },
-      }),
+      this.prisma.tenant.count(),
+      this.prisma.tenant.count({ where: { isActive: true } }),
     ]);
 
-    // Calculate growth rate (comparing last 30 days to previous 30 days)
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    // Get recent tenants (last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const previousPeriodTenants = await this.tenantRepository.count({
+    const recentTenants = await this.prisma.tenant.count({
       where: {
-        createdAt: Between(sixtyDaysAgo, thirtyDaysAgo),
-        deletedAt: IsNull(),
-      },
+        createdAt: { gte: thirtyDaysAgo }
+      }
     });
 
-    const growthRate =
-      previousPeriodTenants > 0
-        ? ((recentTenants - previousPeriodTenants) / previousPeriodTenants) *
-          100
-        : 0;
+    // Calculate growth rate (simplified)
+    const sixtyDaysAgo = new Date();
+    sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
 
-    // Convert tenantsByPlan to Record format
-    const planStats: Record<string, number> = {};
-    tenantsByPlan.forEach((item: any) => {
-      planStats[item.plan] = parseInt(item.count);
+    const previousPeriodTenants = await this.prisma.tenant.count({
+      where: {
+        createdAt: { 
+          gte: sixtyDaysAgo,
+          lt: thirtyDaysAgo
+        }
+      }
     });
+
+    const growthRate = previousPeriodTenants > 0 
+      ? ((recentTenants - previousPeriodTenants) / previousPeriodTenants) * 100 
+      : 0;
 
     return {
       totalTenants,
       activeTenants,
-      trialTenants,
-      verifiedTenants,
-      tenantsByPlan: planStats,
+      trialTenants: 0, // Would need additional schema
+      verifiedTenants: 0, // Would need additional schema  
+      tenantsByPlan: {}, // Would need subscription integration
       recentTenants,
-      growthRate: Math.round(growthRate * 100) / 100, // Round to 2 decimal places
+      growthRate,
     };
+  }
+
+  /**
+   * Track tenant usage
+   */
+  async trackTenantUsage(
+    tenantId: string,
+    metric: TenantUsageMetric,
+    value: number,
+    limit?: number
+  ): Promise<TenantUsage> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Find or create usage record for today
+    let usageRecord = await this.prisma.tenantUsage.findFirst({
+      where: {
+        tenantId,
+        metric,
+        period: today,
+      }
+    });
+
+    if (usageRecord) {
+      usageRecord = await this.prisma.tenantUsage.update({
+        where: { id: usageRecord.id },
+        data: {
+          value: value,
+          updatedAt: new Date()
+        }
+      });
+    } else {
+      usageRecord = await this.prisma.tenantUsage.create({
+        data: {
+          tenantId,
+          metric,
+          period: today,
+          value,
+        }
+      });
+    }
+
+    this.logger.log(`Tracked usage for tenant ${tenantId}: ${metric} = ${value}`);
+    return usageRecord;
   }
 
   /**
    * Get tenant usage summary
    */
-  async getTenantUsageSummary(tenantId: string): Promise<TenantUsageSummary> {
-    const tenant = await this.getTenantById(tenantId);
+  async getTenantUsage(tenantId: string): Promise<TenantUsageSummary> {
+    const tenant = await this.findTenantById(tenantId);
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const usageRecords = await this.tenantUsageRepository.find({
+    // Get current usage
+    const usageRecords = await this.prisma.tenantUsage.findMany({
       where: {
         tenantId,
-        date: today,
-      },
+        period: today,
+      }
     });
 
+    // Initialize usage and limits
     const currentUsage: Record<TenantUsageMetric, number> = {
       [TenantUsageMetric.API_CALLS]: 0,
       [TenantUsageMetric.STORAGE_BYTES]: 0,
@@ -523,42 +496,41 @@ export class TenantService {
       [TenantUsageMetric.DATABASE_QUERIES]: 0,
       [TenantUsageMetric.WEBSOCKET_CONNECTIONS]: 0,
       [TenantUsageMetric.BACKGROUND_JOBS]: 0,
+      [TenantUsageMetric.STORAGE]: 0,
+      [TenantUsageMetric.BANDWIDTH]: 0,
+      [TenantUsageMetric.CUSTOM_FIELDS]: 0,
     };
 
     const limits: Record<TenantUsageMetric, number> = {
-      [TenantUsageMetric.API_CALLS]: 0,
-      [TenantUsageMetric.STORAGE_BYTES]: tenant.maxStorage,
-      [TenantUsageMetric.USERS]: tenant.maxUsers,
-      [TenantUsageMetric.EMAILS_SENT]: 0,
-      [TenantUsageMetric.FILES_UPLOADED]: 0,
-      [TenantUsageMetric.DATABASE_QUERIES]: 0,
-      [TenantUsageMetric.WEBSOCKET_CONNECTIONS]: 0,
-      [TenantUsageMetric.BACKGROUND_JOBS]: 0,
+      [TenantUsageMetric.API_CALLS]: 10000,
+      [TenantUsageMetric.STORAGE_BYTES]: 1024 * 1024 * 1024, // 1GB
+      [TenantUsageMetric.USERS]: 100,
+      [TenantUsageMetric.EMAILS_SENT]: 1000,
+      [TenantUsageMetric.FILES_UPLOADED]: 500,
+      [TenantUsageMetric.DATABASE_QUERIES]: 50000,
+      [TenantUsageMetric.WEBSOCKET_CONNECTIONS]: 100,
+      [TenantUsageMetric.BACKGROUND_JOBS]: 1000,
+      [TenantUsageMetric.STORAGE]: 1024 * 1024 * 1024, // 1GB
+      [TenantUsageMetric.BANDWIDTH]: 1024 * 1024 * 1024, // 1GB
+      [TenantUsageMetric.CUSTOM_FIELDS]: 50,
     };
 
-    // Populate usage data
+    // Populate current usage from records
     usageRecords.forEach(record => {
       currentUsage[record.metric] = record.value;
-      limits[record.metric] = record.limit;
     });
 
-    // Calculate usage percentages and over-limit status
-    const usagePercentage: Record<TenantUsageMetric, number> = {} as Record<
-      TenantUsageMetric,
-      number
-    >;
-    const isOverLimit: Record<TenantUsageMetric, boolean> = {} as Record<
-      TenantUsageMetric,
-      boolean
-    >;
+    // Calculate usage percentages and over-limit flags
+    const usagePercentage: Record<TenantUsageMetric, number> = {} as any;
+    const isOverLimit: Record<TenantUsageMetric, boolean> = {} as any;
 
-    Object.values(TenantUsageMetric).forEach(metric => {
-      const limit = limits[metric];
+    Object.keys(currentUsage).forEach(key => {
+      const metric = key as TenantUsageMetric;
       const usage = currentUsage[metric];
-
-      usagePercentage[metric] =
-        limit > 0 ? Math.round((usage / limit) * 100) : 0;
-      isOverLimit[metric] = limit > 0 && usage > limit;
+      const limit = limits[metric];
+      
+      usagePercentage[metric] = limit > 0 ? (usage / limit) * 100 : 0;
+      isOverLimit[metric] = usage > limit;
     });
 
     return {
@@ -572,128 +544,56 @@ export class TenantService {
   }
 
   /**
-   * Update tenant usage
-   */
-  async updateTenantUsage(
-    tenantId: string,
-    metric: TenantUsageMetric,
-    value: number,
-    limit?: number
-  ): Promise<TenantUsage> {
-    // Validate UUID
-    if (!validateUUID(tenantId)) {
-      throw new BadRequestException(`Invalid tenant ID format: "${tenantId}"`);
-    }
-
-    // Validate metric enum
-    if (!Object.values(TenantUsageMetric).includes(metric)) {
-      throw new BadRequestException(
-        `Invalid metric: "${metric}". Valid metrics are: ${Object.values(TenantUsageMetric).join(', ')}`
-      );
-    }
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    try {
-      let usageRecord = await this.tenantUsageRepository.findOne({
-        where: {
-          tenantId,
-          date: today,
-          metric,
-        },
-      });
-
-      if (!usageRecord) {
-        usageRecord = this.tenantUsageRepository.create({
-          tenantId,
-          date: today,
-          metric,
-          value: 0,
-          limit: limit ?? 0,
-        });
-      }
-
-      usageRecord.value = value;
-      if (limit !== undefined) {
-        usageRecord.limit = limit;
-      }
-
-      return await this.tenantUsageRepository.save(usageRecord);
-    } catch (error: any) {
-      this.logger.error(
-        `Failed to update tenant usage: ${error.message}`,
-        error
-      );
-
-      // Handle enum validation errors
-      if (error.message?.includes('tenant_usage_metric_enum')) {
-        throw new BadRequestException(
-          `Invalid metric value: "${metric}". Valid values are: ${Object.values(TenantUsageMetric).join(', ')}. Please use snake_case format (e.g., 'api_calls' not 'apiCalls').`
-        );
-      }
-
-      throw error;
-    }
-  }
-
-  /**
-   * Get feature flag for tenant
-   */
-  async getFeatureFlag(
-    tenantId: string,
-    feature: TenantFeature
-  ): Promise<TenantFeatureFlag | null> {
-    try {
-      return await this.tenantFeatureFlagRepository.findOne({
-        where: { tenantId, feature },
-      });
-    } catch (error: any) {
-      this.logger.error(
-        `Failed to get feature flag ${feature} for tenant ${tenantId}:`,
-        error
-      );
-
-      // Handle enum validation errors
-      if (error.message?.includes('tenant_feature_flags_feature_enum')) {
-        throw new BadRequestException(
-          `Invalid feature value: "${feature}". Valid values are: ${Object.values(TenantFeature).join(', ')}. Please use snake_case format (e.g., 'advanced_analytics' not 'ADVANCED_ANALYTICS').`
-        );
-      }
-
-      throw error;
-    }
-  }
-
-  /**
    * Check if feature is enabled for tenant
    */
-  async isFeatureEnabled(
-    tenantId: string,
-    feature: TenantFeature
-  ): Promise<boolean> {
-    try {
-      const featureFlag = await this.getFeatureFlag(tenantId, feature);
-      return featureFlag?.isEnabled ?? false;
-    } catch (error: any) {
-      this.logger.error(
-        `Failed to check feature ${feature} for tenant ${tenantId}:`,
-        error
-      );
+  async isFeatureEnabled(tenantId: string, feature: TenantFeature): Promise<boolean> {
+    const featureFlag = await this.prisma.tenantFeatureFlag.findFirst({
+      where: { tenantId, feature }
+    });
 
-      // Handle enum validation errors
-      if (error.message?.includes('tenant_feature_flags_feature_enum')) {
-        throw new BadRequestException(
-          `Invalid feature value: "${feature}". Valid values are: ${Object.values(TenantFeature).join(', ')}. Please use snake_case format (e.g., 'advanced_analytics' not 'ADVANCED_ANALYTICS').`
-        );
-      }
-
-      throw error;
-    }
+    return featureFlag?.enabled ?? false;
   }
 
   /**
-   * Update feature flag
+   * Enable/disable feature for tenant
+   */
+  async setFeatureFlag(
+    tenantId: string,
+    feature: TenantFeature,
+    isEnabled: boolean,
+    config?: Record<string, any>
+  ): Promise<TenantFeatureFlag> {
+    // Find existing feature flag
+    let featureFlag = await this.prisma.tenantFeatureFlag.findFirst({
+      where: { tenantId, feature }
+    });
+
+    if (featureFlag) {
+      // Update existing
+      featureFlag = await this.prisma.tenantFeatureFlag.update({
+        where: { id: featureFlag.id },
+        data: {
+          enabled: isEnabled,
+          updatedAt: new Date()
+        }
+      });
+    } else {
+      // Create new
+      featureFlag = await this.prisma.tenantFeatureFlag.create({
+        data: {
+          tenantId,
+          feature,
+          enabled: isEnabled,
+        }
+      });
+    }
+
+    this.logger.log(`Feature ${feature} ${isEnabled ? 'enabled' : 'disabled'} for tenant ${tenantId}`);
+    return featureFlag;
+  }
+
+  /**
+   * Alias for setFeatureFlag (for backward compatibility)
    */
   async updateFeatureFlag(
     tenantId: string,
@@ -701,157 +601,67 @@ export class TenantService {
     isEnabled: boolean,
     config?: Record<string, any>
   ): Promise<TenantFeatureFlag> {
-    try {
-      let featureFlag = await this.getFeatureFlag(tenantId, feature);
-
-      if (!featureFlag) {
-        featureFlag = this.tenantFeatureFlagRepository.create({
-          tenantId,
-          feature,
-          isEnabled,
-          ...(config && { config }),
-        });
-      } else {
-        featureFlag.isEnabled = isEnabled;
-        if (config) {
-          featureFlag.config = config;
-        }
-      }
-
-      return await this.tenantFeatureFlagRepository.save(featureFlag);
-    } catch (error: any) {
-      this.logger.error(
-        `Failed to update feature flag ${feature} for tenant ${tenantId}:`,
-        error
-      );
-
-      // Handle enum validation errors
-      if (error.message?.includes('tenant_feature_flags_feature_enum')) {
-        throw new BadRequestException(
-          `Invalid feature value: "${feature}". Valid values are: ${Object.values(TenantFeature).join(', ')}. Please use snake_case format (e.g., 'advanced_analytics' not 'ADVANCED_ANALYTICS').`
-        );
-      }
-
-      throw error;
-    }
+    return this.setFeatureFlag(tenantId, feature, isEnabled, config);
   }
 
   /**
-   * Get all feature flags for a tenant
+   * Get all enabled features for tenant
    */
-  async getTenantFeatures(tenantId: string): Promise<TenantFeatureFlag[]> {
-    await this.getTenantById(tenantId); // Verify tenant exists
-
-    return await this.tenantFeatureFlagRepository.find({
-      where: { tenantId },
-      order: { feature: 'ASC' },
+  async getEnabledFeatures(tenantId: string): Promise<TenantFeature[]> {
+    const enabledFlags = await this.prisma.tenantFeatureFlag.findMany({
+      where: { tenantId, enabled: true },
     });
+
+    return enabledFlags.map(flag => flag.feature);
   }
 
   /**
-   * Bulk update feature flags for a tenant
+   * Initialize default feature flags for new tenant
    */
-  async bulkUpdateFeatureFlags(
-    tenantId: string,
-    updates: Array<{
-      feature: TenantFeature;
-      isEnabled: boolean;
-      config?: Record<string, any>;
-    }>
-  ): Promise<TenantFeatureFlag[]> {
-    try {
-      await this.getTenantById(tenantId); // Verify tenant exists
-
-      const updatedFlags: TenantFeatureFlag[] = [];
-
-      for (const update of updates) {
-        const featureFlag = await this.updateFeatureFlag(
-          tenantId,
-          update.feature,
-          update.isEnabled,
-          update.config
-        );
-        updatedFlags.push(featureFlag);
-      }
-
-      return updatedFlags;
-    } catch (error: any) {
-      this.logger.error(
-        `Failed to bulk update feature flags for tenant ${tenantId}:`,
-        error
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * Get feature flags statistics for a tenant
-   */
-  async getFeatureFlagsStats(tenantId: string): Promise<{
-    total: number;
-    enabled: number;
-    disabled: number;
-  }> {
-    await this.getTenantById(tenantId); // Verify tenant exists
-
-    const [total, enabled] = await Promise.all([
-      this.tenantFeatureFlagRepository.count({ where: { tenantId } }),
-      this.tenantFeatureFlagRepository.count({
-        where: { tenantId, isEnabled: true },
-      }),
-    ]);
-
-    return {
-      total,
-      enabled,
-      disabled: total - enabled,
-    };
-  }
-
-  /**
-   * Initialize default feature flags for a new tenant
-   */
-  private async initializeDefaultFeatureFlags(tenantId: string): Promise<void> {
+  private async initializeDefaultFeatureFlags(tenantId: string, tx?: any): Promise<void> {
+    const prisma = tx || this.prisma;
+    
     const defaultFeatures = [
-      TenantFeature.MFA_ENFORCEMENT,
+      TenantFeature.ANALYTICS,
+      TenantFeature.TEAM_MANAGEMENT,
+      TenantFeature.AUDIT_LOGS,
       TenantFeature.EMAIL_TEMPLATES,
-      TenantFeature.AUDIT_LOGGING,
     ];
 
-    const featureFlags = defaultFeatures.map(feature =>
-      this.tenantFeatureFlagRepository.create({
-        tenantId,
-        feature,
-        isEnabled: true,
-        config: {},
-      })
-    );
+    const featureFlags = defaultFeatures.map(feature => ({
+      tenantId,
+      feature,
+      enabled: true,
+    }));
 
-    await this.tenantFeatureFlagRepository.save(featureFlags);
+    await prisma.tenantFeatureFlag.createMany({
+      data: featureFlags,
+    });
+
+    this.logger.log(`Initialized default features for tenant: ${tenantId}`);
   }
 
   /**
-   * Initialize default feature flags for a new tenant with transaction manager
+   * Initialize tenant usage tracking
    */
-  private async initializeDefaultFeatureFlagsWithManager(
-    tenantId: string,
-    manager: any
-  ): Promise<void> {
-    const defaultFeatures = [
-      TenantFeature.MFA_ENFORCEMENT,
-      TenantFeature.EMAIL_TEMPLATES,
-      TenantFeature.AUDIT_LOGGING,
-    ];
+  private async initializeTenantUsage(tenantId: string, tx?: any): Promise<void> {
+    const prisma = tx || this.prisma;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    const featureFlags = defaultFeatures.map(feature =>
-      manager.create(TenantFeatureFlag, {
-        tenantId,
-        feature,
-        isEnabled: true,
-        config: {},
-      })
-    );
+    // Initialize usage tracking for all metrics
+    const metrics = Object.values(TenantUsageMetric);
+    const usageRecords = metrics.map(metric => ({
+      tenantId,
+      metric,
+      period: today,
+      value: 0,
+    }));
 
-    await manager.save(TenantFeatureFlag, featureFlags);
+    await prisma.tenantUsage.createMany({
+      data: usageRecords,
+    });
+
+    this.logger.log(`Initialized usage tracking for tenant: ${tenantId}`);
   }
 }

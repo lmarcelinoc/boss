@@ -1,178 +1,47 @@
-import { Injectable } from '@nestjs/common';
-import { env, isProduction, isDevelopment } from '@app/config';
-
-export interface SecurityHeadersConfig {
-  enableSecurityHeaders: boolean;
-  enableCSP: boolean;
-  enableHSTS: boolean;
-  hstsMaxAge: number;
-  cspDirectives: Record<string, string[]>;
-}
-
-export interface CorsConfig {
-  origin: string | string[] | boolean;
-  credentials: boolean;
-  methods: string[];
-  allowedHeaders: string[];
-  exposedHeaders: string[];
-  maxAge: number;
-  preflightContinue: boolean;
-  optionsSuccessStatus: number;
-}
+import { Injectable, Logger } from '@nestjs/common';
+import { 
+  getSecurityConfig,
+  getDevelopmentSecurityOverrides,
+  getProductionSecurityOverrides 
+} from '../../config/security.config';
 
 @Injectable()
 export class SecurityConfigService {
+  private readonly logger = new Logger(SecurityConfigService.name);
+  private readonly config = this.buildConfig();
+
+  private buildConfig() {
+    const baseConfig = getSecurityConfig();
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    let finalConfig = baseConfig;
+
+    if (isDevelopment) {
+      const devOverrides = getDevelopmentSecurityOverrides();
+      finalConfig = this.mergeConfigs(baseConfig, devOverrides);
+      this.logger.debug('Applied development security configuration');
+    } else if (isProduction) {
+      const prodOverrides = getProductionSecurityOverrides();
+      finalConfig = this.mergeConfigs(baseConfig, prodOverrides);
+      this.logger.debug('Applied production security configuration');
+    }
+
+    return finalConfig;
+  }
+
   /**
-   * Get security headers configuration
+   * Get Helmet configuration for security headers
    */
-  getSecurityHeadersConfig(): SecurityHeadersConfig {
-    return {
-      enableSecurityHeaders: env.ENABLE_SECURITY_HEADERS,
-      enableCSP: env.ENABLE_CSP,
-      enableHSTS: env.ENABLE_HSTS,
-      hstsMaxAge: env.HSTS_MAX_AGE,
-      cspDirectives: this.getCSPDirectives(),
-    };
+  getHelmetConfig() {
+    return this.config.helmet;
   }
 
   /**
    * Get CORS configuration
    */
-  getCorsConfig(): CorsConfig {
-    const origins = env.CORS_ORIGIN.split(',').map(origin => origin.trim());
-
-    return {
-      origin: isDevelopment() ? origins : origins,
-      credentials: env.CORS_CREDENTIALS,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-      allowedHeaders: [
-        'Origin',
-        'X-Requested-With',
-        'Content-Type',
-        'Accept',
-        'Authorization',
-        'X-Tenant-ID',
-        'X-API-Key',
-        'X-Request-ID',
-        'X-Client-Version',
-        'X-Device-ID',
-        'X-Session-ID',
-      ],
-      exposedHeaders: [
-        'X-Request-ID',
-        'X-Rate-Limit-Limit',
-        'X-Rate-Limit-Remaining',
-        'X-Rate-Limit-Reset',
-        'X-Total-Count',
-        'X-Page-Count',
-      ],
-      maxAge: 86400, // 24 hours
-      preflightContinue: false,
-      optionsSuccessStatus: 204,
-    };
-  }
-
-  /**
-   * Get Content Security Policy directives
-   */
-  private getCSPDirectives(): Record<string, string[]> {
-    if (!env.ENABLE_CSP) {
-      return {};
-    }
-
-    const baseDirectives = {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", 'data:', 'https:'],
-      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
-      connectSrc: ["'self'"],
-      frameSrc: ["'none'"],
-      objectSrc: ["'none'"],
-      mediaSrc: ["'self'"],
-      manifestSrc: ["'self'"],
-    };
-
-    if (isDevelopment()) {
-      // Allow more permissive settings for development
-      baseDirectives.scriptSrc.push("'unsafe-eval'");
-      baseDirectives.connectSrc.push('ws:', 'wss:');
-    }
-
-    if (isProduction()) {
-      // Stricter settings for production
-      baseDirectives.styleSrc = ["'self'"]; // Remove unsafe-inline in production
-      baseDirectives.connectSrc.push('https://api.stripe.com');
-    }
-
-    return baseDirectives;
-  }
-
-  /**
-   * Get Helmet configuration
-   */
-  getHelmetConfig() {
-    const securityConfig = this.getSecurityHeadersConfig();
-
-    return {
-      contentSecurityPolicy: securityConfig.enableCSP
-        ? {
-            directives: securityConfig.cspDirectives,
-            reportOnly: false,
-          }
-        : false,
-      crossOriginEmbedderPolicy: isProduction(),
-      crossOriginOpenerPolicy: { policy: 'same-origin' as const },
-      crossOriginResourcePolicy: { policy: 'same-site' as const },
-      dnsPrefetchControl: { allow: false },
-      frameguard: { action: 'deny' as const },
-      hidePoweredBy: true,
-      hsts: securityConfig.enableHSTS
-        ? {
-            maxAge: securityConfig.hstsMaxAge,
-            includeSubDomains: true,
-            preload: true,
-          }
-        : false,
-      ieNoOpen: true,
-      noSniff: true,
-      permittedCrossDomainPolicies: { permittedPolicies: 'none' as const },
-      referrerPolicy: { policy: 'strict-origin-when-cross-origin' as const },
-      xssFilter: true,
-    };
-  }
-
-  /**
-   * Get additional security headers
-   */
-  getAdditionalSecurityHeaders(): Record<string, string> {
-    const headers: Record<string, string> = {
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-      'X-XSS-Protection': '1; mode=block',
-      'Referrer-Policy': 'strict-origin-when-cross-origin',
-      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-    };
-
-    if (isProduction()) {
-      headers['Strict-Transport-Security'] =
-        `max-age=${env.HSTS_MAX_AGE}; includeSubDomains; preload`;
-    }
-
-    return headers;
-  }
-
-  /**
-   * Validate CORS origin
-   */
-  validateCorsOrigin(origin: string): boolean {
-    const allowedOrigins = env.CORS_ORIGIN.split(',').map(o => o.trim());
-
-    if (isDevelopment()) {
-      return true; // Allow all origins in development
-    }
-
-    return allowedOrigins.includes(origin) || allowedOrigins.includes('*');
+  getCorsConfig() {
+    return this.config.cors;
   }
 
   /**
@@ -180,30 +49,153 @@ export class SecurityConfigService {
    */
   getRateLimitConfig() {
     return {
-      windowMs: env.RATE_LIMIT_WINDOW_MS,
-      max: env.RATE_LIMIT_MAX_REQUESTS,
-      skipSuccessfulRequests: env.RATE_LIMIT_SKIP_SUCCESSFUL_REQUESTS,
-      standardHeaders: true,
-      legacyHeaders: false,
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: process.env.NODE_ENV === 'development' ? 1000 : 100, // requests per windowMs
+      message: {
+        error: 'Too many requests',
+        message: 'Too many requests from this IP, please try again later.',
+        statusCode: 429,
+      },
+      standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+      legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+      skipSuccessfulRequests: false,
+      skipFailedRequests: false,
+      keyGenerator: (req: any) => {
+        // Use IP + User ID for authenticated requests for more precise limiting
+        const ip = req.ip || req.connection.remoteAddress || 'unknown';
+        const userId = req.user?.id || 'anonymous';
+        return `${ip}:${userId}`;
+      },
+      skip: (req: any) => {
+        // Skip rate limiting for health checks and static assets
+        return (
+          req.url === '/health' ||
+          req.url.startsWith('/favicon') ||
+          req.url.startsWith('/robots.txt')
+        );
+      },
       handler: (req: any, res: any) => {
+        this.logger.warn(
+          `Rate limit exceeded for ${req.ip} on ${req.method} ${req.url}`
+        );
         res.status(429).json({
           error: 'Too many requests',
           message: 'Rate limit exceeded. Please try again later.',
-          retryAfter: Math.ceil(env.RATE_LIMIT_WINDOW_MS / 1000),
+          statusCode: 429,
+          timestamp: new Date().toISOString(),
+          path: req.url,
         });
       },
     };
   }
 
   /**
-   * Get speed limiting configuration
+   * Get speed limiting configuration for progressive slowdown
    */
   getSpeedLimitConfig() {
     return {
       windowMs: 15 * 60 * 1000, // 15 minutes
-      delayAfter: 100, // allow 100 requests per 15 minutes, then...
-      delayMs: (hits: number) => Math.max(0, (hits - 100) * 500), // begin adding 500ms of delay per request above 100
-      maxDelayMs: 20000, // maximum delay of 20 seconds
+      delayAfter: 50, // Allow 50 requests per 15 minutes at full speed
+      delayMs: (hits: number) => hits * 100, // Add 100ms delay for each request after delayAfter
+      maxDelayMs: 5000, // Maximum delay of 5 seconds
+      skipSuccessfulRequests: false,
+      skipFailedRequests: false,
+      keyGenerator: (req: any) => {
+        const ip = req.ip || req.connection.remoteAddress || 'unknown';
+        const userId = req.user?.id || 'anonymous';
+        return `speed:${ip}:${userId}`;
+      },
+      skip: (req: any) => {
+        return (
+          req.url === '/health' ||
+          req.url.startsWith('/favicon') ||
+          req.url.startsWith('/robots.txt')
+        );
+      },
+      onLimitReached: (req: any) => {
+        this.logger.warn(
+          `Speed limit reached for ${req.ip} on ${req.method} ${req.url}`
+        );
+      },
     };
+  }
+
+  /**
+   * Get CSP (Content Security Policy) directives
+   */
+  getCSPDirectives() {
+    return this.config.helmet.contentSecurityPolicy.directives;
+  }
+
+  /**
+   * Check if origin is allowed for CORS
+   */
+  isOriginAllowed(origin: string): boolean {
+    if (!origin) return true; // Same-origin requests
+
+    // Development mode allows all origins
+    if (process.env.NODE_ENV === 'development') {
+      return true;
+    }
+
+    // Check against configured origins
+    const corsConfig = this.config.cors;
+    
+    if (typeof corsConfig.origin === 'boolean') {
+      return corsConfig.origin;
+    }
+
+    if (Array.isArray(corsConfig.origin)) {
+      return corsConfig.origin.includes(origin);
+    }
+
+    if (typeof corsConfig.origin === 'string') {
+      return corsConfig.origin === origin;
+    }
+
+    return false;
+  }
+
+  /**
+   * Get security headers for manual application
+   */
+  getSecurityHeaders() {
+    return {
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'SAMEORIGIN',
+      'X-XSS-Protection': '1; mode=block',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'X-Download-Options': 'noopen',
+      'X-Permitted-Cross-Domain-Policies': 'none',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+    };
+  }
+
+  private mergeConfigs(base: any, override: any): any {
+    const merged = JSON.parse(JSON.stringify(base));
+    
+    if (override.helmet?.contentSecurityPolicy?.directives) {
+      merged.helmet.contentSecurityPolicy.directives = {
+        ...merged.helmet.contentSecurityPolicy.directives,
+        ...override.helmet.contentSecurityPolicy.directives,
+      };
+    }
+
+    if (override.helmet?.hsts) {
+      merged.helmet.hsts = {
+        ...merged.helmet.hsts,
+        ...override.helmet.hsts,
+      };
+    }
+
+    if (override.cors) {
+      merged.cors = {
+        ...merged.cors,
+        ...override.cors,
+      };
+    }
+
+    return merged;
   }
 }

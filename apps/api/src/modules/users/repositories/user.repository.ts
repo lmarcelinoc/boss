@@ -1,156 +1,205 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { User } from '../entities/user.entity';
-import { TenantScopedRepository } from '../../../common/repositories/tenant-scoped.repository';
+import { PrismaService } from '../../../database/prisma.service';
+import { User, Prisma } from '@prisma/client';
 
 @Injectable()
-export class UserRepository extends TenantScopedRepository<User> {
-  constructor(
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>
-  ) {
-    super(
-      userRepository.target,
-      userRepository.manager,
-      userRepository.queryRunner
-    );
-  }
-
-  protected getTenantIdField(): string {
-    return 'tenantId';
-  }
-
-  protected override shouldScopeByTenant(): boolean {
-    return true;
-  }
+export class UserRepository {
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
    * Find user by email within current tenant
    */
   async findByEmail(email: string): Promise<User | null> {
-    return this.findOneWithTenantScope({
-      where: { email },
+    return this.prisma.user.findFirst({
+      where: { email }
     });
   }
 
   /**
-   * Find user by external ID within current tenant
+   * Find user by ID within current tenant
    */
-  async findByExternalId(externalId: string): Promise<User | null> {
-    return this.findOneWithTenantScope({
-      where: { externalId },
+  async findById(id: string): Promise<User | null> {
+    return this.prisma.user.findFirst({
+      where: { id },
+      include: {
+        profile: true,
+        userRoles: {
+          include: {
+            role: true
+          }
+        }
+      }
     });
   }
 
   /**
    * Find users by role within current tenant
    */
-  async findByRole(role: string): Promise<User[]> {
-    return this.createTenantScopedQueryBuilder('user')
-      .leftJoinAndSelect('user.roles', 'role')
-      .where('role.name = :role', { role })
-      .getMany();
+  async findByRole(roleName: string): Promise<User[]> {
+    return this.prisma.user.findMany({
+      where: {
+        userRoles: {
+          some: {
+            role: {
+              name: roleName
+            }
+          }
+        }
+      },
+      include: {
+        profile: true,
+        userRoles: {
+          include: {
+            role: true
+          }
+        }
+      }
+    });
+  }
+
+  /**
+   * Find users by status within current tenant
+   */
+  async findByStatus(status: string): Promise<User[]> {
+    return this.prisma.user.findMany({
+      where: { status },
+      include: {
+        profile: true,
+        userRoles: {
+          include: {
+            role: true
+          }
+        }
+      }
+    });
   }
 
   /**
    * Find active users within current tenant
    */
-  async findActiveUsers(): Promise<User[]> {
-    return this.findWithTenantScope({
-      where: { status: 'ACTIVE' },
+  async findActive(): Promise<User[]> {
+    return this.prisma.user.findMany({
+      where: { isActive: true },
+      include: {
+        profile: true,
+        userRoles: {
+          include: {
+            role: true
+          }
+        }
+      }
     });
   }
 
   /**
-   * Count users by status within current tenant
+   * Create a new user
    */
-  async countByStatus(status: string): Promise<number> {
-    return this.countWithTenantScope({
-      where: { status },
+  async create(userData: Prisma.UserCreateInput): Promise<User> {
+    return this.prisma.user.create({
+      data: userData,
+      include: {
+        profile: true,
+        userRoles: {
+          include: {
+            role: true
+          }
+        }
+      }
     });
   }
 
   /**
-   * Find users with pagination within current tenant
+   * Update user by ID
    */
-  async findWithPagination(
-    page: number = 1,
-    limit: number = 10,
-    search?: string
-  ): Promise<{ users: User[]; total: number }> {
-    const queryBuilder = this.createTenantScopedQueryBuilder('user');
-
-    if (search) {
-      queryBuilder.andWhere(
-        '(user.firstName ILIKE :search OR user.lastName ILIKE :search OR user.email ILIKE :search)',
-        { search: `%${search}%` }
-      );
-    }
-
-    // Apply safe pagination
-    const safeLimit = Math.min(Math.max(1, limit), 100);
-    const safePage = Math.max(1, page);
-    const offset = (safePage - 1) * safeLimit;
-
-    const [users, total] = await queryBuilder
-      .skip(offset)
-      .take(safeLimit)
-      .orderBy('user.createdAt', 'DESC')
-      .getManyAndCount();
-
-    return { users, total };
-  }
-
-  /**
-   * Find users by multiple IDs within current tenant
-   */
-  override async findByIds(ids: string[]): Promise<User[]> {
-    if (ids.length === 0) return [];
-
-    return this.createTenantScopedQueryBuilder('user')
-      .where('user.id IN (:...ids)', { ids })
-      .getMany();
-  }
-
-  /**
-   * Check if email exists within current tenant
-   */
-  async emailExists(email: string): Promise<boolean> {
-    const count = await this.countWithTenantScope({
-      where: { email },
+  async update(id: string, userData: Prisma.UserUpdateInput): Promise<User> {
+    return this.prisma.user.update({
+      where: { id },
+      data: userData,
+      include: {
+        profile: true,
+        userRoles: {
+          include: {
+            role: true
+          }
+        }
+      }
     });
-    return count > 0;
   }
 
   /**
-   * Find users by last login date within current tenant
+   * Delete user by ID (soft delete)
    */
-  async findUsersByLastLogin(days: number): Promise<User[]> {
-    const date = new Date();
-    date.setDate(date.getDate() - days);
-
-    return this.createTenantScopedQueryBuilder('user')
-      .where('user.lastLoginAt >= :date', { date })
-      .getMany();
+  async softDelete(id: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id },
+      data: { 
+        isActive: false,
+        updatedAt: new Date()
+      }
+    });
   }
 
   /**
-   * Get user statistics within current tenant
+   * Count users within current tenant
    */
-  async getUserStats(): Promise<{
-    total: number;
-    active: number;
-    pending: number;
-    suspended: number;
-  }> {
-    const [total, active, pending, suspended] = await Promise.all([
-      this.countWithTenantScope(),
-      this.countWithTenantScope({ where: { status: 'ACTIVE' } }),
-      this.countWithTenantScope({ where: { status: 'PENDING' } }),
-      this.countWithTenantScope({ where: { status: 'SUSPENDED' } }),
-    ]);
+  async count(where?: Prisma.UserWhereInput): Promise<number> {
+    return this.prisma.user.count({ where });
+  }
 
-    return { total, active, pending, suspended };
+  /**
+   * Find many users with pagination
+   */
+  async findMany(options: {
+    skip?: number;
+    take?: number;
+    where?: Prisma.UserWhereInput;
+    orderBy?: Prisma.UserOrderByWithRelationInput;
+    include?: Prisma.UserInclude;
+  } = {}): Promise<User[]> {
+    return this.prisma.user.findMany({
+      ...options,
+      include: options.include || {
+        profile: true,
+        userRoles: {
+          include: {
+            role: true
+          }
+        }
+      }
+    });
+  }
+
+  /**
+   * Update user's last login
+   */
+  async updateLastLogin(id: string, ipAddress?: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id },
+      data: {
+        lastLoginAt: new Date(),
+        ...(ipAddress && { lastLoginIp: ipAddress })
+      }
+    });
+  }
+
+  /**
+   * Find users for bulk operations (using admin context to bypass tenant scoping)
+   */
+  async findForBulkOperations(userIds: string[]): Promise<User[]> {
+    return this.prisma.withAdminContext(() =>
+      this.prisma.user.findMany({
+        where: {
+          id: { in: userIds }
+        },
+        include: {
+          profile: true,
+          userRoles: {
+            include: {
+              role: true
+            }
+          }
+        }
+      })
+    );
   }
 }

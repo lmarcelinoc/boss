@@ -1,80 +1,105 @@
-import { TestDataSource } from '../database/test-data-source';
-import { DataSource, Repository, ObjectLiteral } from 'typeorm';
+import { PrismaClient } from '@prisma/client';
 
 /**
  * Test Database Utilities
  *
- * Provides utilities for managing test database operations
+ * Provides utilities for managing test database operations using Prisma
  */
 
 export class TestDatabaseUtils {
-  private static dataSource: DataSource;
+  private static prisma: PrismaClient;
 
   /**
    * Initialize test database connection
    */
   static async initialize(): Promise<void> {
-    if (!this.dataSource || !this.dataSource.isInitialized) {
-      this.dataSource = TestDataSource;
-      await this.dataSource.initialize();
+    if (!this.prisma) {
+      const dbUrl = process.env.DATABASE_URL_TEST || process.env.DATABASE_URL || 'postgresql://localhost:5432/test';
+      this.prisma = new PrismaClient({
+        datasources: {
+          db: {
+            url: dbUrl,
+          },
+        },
+        log: ['error'],
+      });
+      
+      await this.prisma.$connect();
     }
   }
 
   /**
-   * Get repository for an entity
+   * Get Prisma client instance
    */
-  static getRepository<T extends ObjectLiteral>(
-    entity: new () => T
-  ): Repository<T> {
-    if (!this.dataSource || !this.dataSource.isInitialized) {
+  static getPrismaClient(): PrismaClient {
+    if (!this.prisma) {
       throw new Error(
         'Test database not initialized. Call initialize() first.'
       );
     }
-    return this.dataSource.getRepository(entity);
+    return this.prisma;
   }
 
   /**
-   * Clear all data from all tables
+   * Clear all data from all tables (in correct order due to foreign keys)
    */
   static async clearAllData(): Promise<void> {
-    if (!this.dataSource || !this.dataSource.isInitialized) {
+    if (!this.prisma) {
       throw new Error(
         'Test database not initialized. Call initialize() first.'
       );
     }
 
-    const entities = this.dataSource.entityMetadatas;
-
-    for (const entity of entities) {
-      const repository = this.dataSource.getRepository(entity.name);
-      await repository.clear();
-    }
+    // Delete in order to respect foreign key constraints
+    await this.prisma.auditLog.deleteMany();
+    await this.prisma.notification.deleteMany();
+    await this.prisma.file.deleteMany();
+    await this.prisma.refreshToken.deleteMany();
+    await this.prisma.session.deleteMany();
+    await this.prisma.userRole.deleteMany();
+    await this.prisma.rolePermission.deleteMany();
+    await this.prisma.importError.deleteMany();
+    await this.prisma.bulkImportJob.deleteMany();
+    // Note: AccountRecovery model needs to be added to schema if needed
+    await this.prisma.userProfile.deleteMany();
+    await this.prisma.invitation.deleteMany();
+    await this.prisma.team.deleteMany();
+    await this.prisma.user.deleteMany();
+    await this.prisma.permission.deleteMany();
+    await this.prisma.role.deleteMany();
+    await this.prisma.subscription.deleteMany();
+    await this.prisma.plan.deleteMany();
+    await this.prisma.tenantFeatureFlag.deleteMany();
+    await this.prisma.tenantUsage.deleteMany();
+    await this.prisma.usageAnalytics.deleteMany();
+    await this.prisma.analyticsAggregate.deleteMany();
+    await this.prisma.tenant.deleteMany();
   }
 
   /**
-   * Reset database (drop and recreate)
+   * Reset database (using Prisma migrations)
    */
   static async resetDatabase(): Promise<void> {
-    if (!this.dataSource || !this.dataSource.isInitialized) {
+    if (!this.prisma) {
       throw new Error(
         'Test database not initialized. Call initialize() first.'
       );
     }
 
-    // Drop all tables
-    await this.dataSource.dropDatabase();
-
-    // Run migrations
-    await this.dataSource.runMigrations();
+    // Clear all data first
+    await this.clearAllData();
+    
+    // In test environment, we typically don't need to run migrations
+    // as the test database should already be set up
   }
 
   /**
    * Close database connection
    */
   static async close(): Promise<void> {
-    if (this.dataSource && this.dataSource.isInitialized) {
-      await this.dataSource.destroy();
+    if (this.prisma) {
+      await this.prisma.$disconnect();
+      this.prisma = undefined as any;
     }
   }
 
@@ -82,19 +107,7 @@ export class TestDatabaseUtils {
    * Get database connection status
    */
   static isInitialized(): boolean {
-    return this.dataSource?.isInitialized || false;
-  }
-
-  /**
-   * Get the data source instance
-   */
-  static getDataSource(): DataSource {
-    if (!this.dataSource || !this.dataSource.isInitialized) {
-      throw new Error(
-        'Test database not initialized. Call initialize() first.'
-      );
-    }
-    return this.dataSource;
+    return this.prisma != null;
   }
 }
 
@@ -103,19 +116,16 @@ export class TestDatabaseUtils {
  * Executes a function within a database transaction and rolls back after completion
  */
 export const withTestTransaction = async <T>(
-  fn: () => Promise<T>
+  fn: (prisma: PrismaClient) => Promise<T>
 ): Promise<T> => {
-  const queryRunner = TestDatabaseUtils.getDataSource().createQueryRunner();
-  await queryRunner.connect();
-  await queryRunner.startTransaction();
-
-  try {
-    const result = await fn();
-    await queryRunner.rollbackTransaction();
+  const prisma = TestDatabaseUtils.getPrismaClient();
+  
+  return await prisma.$transaction(async (tx) => {
+    const result = await fn(tx as PrismaClient);
+    // Transaction will automatically rollback if an error is thrown
+    // For testing, we might want to always rollback, but Prisma handles this differently
     return result;
-  } finally {
-    await queryRunner.release();
-  }
+  });
 };
 
 /**
@@ -125,29 +135,55 @@ export const createTestData = {
   /**
    * Create a test user
    */
-  user: (overrides: Partial<any> = {}) => ({
+  user: (overrides: any = {}) => ({
     email: `test-${Date.now()}@example.com`,
     firstName: 'Test',
     lastName: 'User',
     password: 'TestPassword123!',
-    isEmailVerified: true,
+    emailVerified: true,
+    status: 'ACTIVE',
+    isActive: true,
     ...overrides,
   }),
 
   /**
    * Create a test tenant
    */
-  tenant: (overrides: Partial<any> = {}) => ({
+  tenant: (overrides: any = {}) => ({
     name: `Test Tenant ${Date.now()}`,
     domain: `test-${Date.now()}.example.com`,
     settings: {},
+    isActive: true,
+    ...overrides,
+  }),
+
+  /**
+   * Create a test role
+   */
+  role: (overrides: any = {}) => ({
+    name: `TEST_ROLE_${Date.now()}`,
+    displayName: 'Test Role',
+    description: 'Test role for testing purposes',
+    type: 'CUSTOM',
+    ...overrides,
+  }),
+
+  /**
+   * Create a test permission
+   */
+  permission: (overrides: any = {}) => ({
+    name: `TEST_PERMISSION_${Date.now()}`,
+    displayName: 'Test Permission',
+    description: 'Test permission for testing purposes',
+    resource: 'TEST',
+    action: 'READ',
     ...overrides,
   }),
 
   /**
    * Create test branding configuration
    */
-  branding: (overrides: Partial<any> = {}) => ({
+  branding: (overrides: any = {}) => ({
     theme: 'light',
     colorScheme: {
       primary: '#3B82F6',

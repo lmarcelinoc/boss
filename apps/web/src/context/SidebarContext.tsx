@@ -3,8 +3,8 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 
 type SidebarContextType = {
   isExpanded: boolean;
-  isMobileOpen: boolean;
   isHovered: boolean;
+  isMobileOpen: boolean;
   activeItem: string | null;
   openSubmenu: string | null;
   toggleSidebar: () => void;
@@ -12,6 +12,7 @@ type SidebarContextType = {
   setIsHovered: (isHovered: boolean) => void;
   setActiveItem: (item: string | null) => void;
   toggleSubmenu: (item: string) => void;
+  closeSidebar: () => void;
 };
 
 const SidebarContext = createContext<SidebarContextType | undefined>(undefined);
@@ -28,28 +29,10 @@ export const SidebarProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [activeItem, setActiveItem] = useState<string | null>(null);
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
-
-  useEffect(() => {
-    const handleResize = () => {
-      const mobile = window.innerWidth < 768;
-      setIsMobile(mobile);
-      if (!mobile) {
-        setIsMobileOpen(false);
-      }
-    };
-
-    handleResize();
-    window.addEventListener("resize", handleResize);
-
-    return () => {
-      window.removeEventListener("resize", handleResize);
-    };
-  }, []);
 
   const toggleSidebar = () => {
     setIsExpanded((prev) => !prev);
@@ -59,16 +42,45 @@ export const SidebarProvider: React.FC<{ children: React.ReactNode }> = ({
     setIsMobileOpen((prev) => !prev);
   };
 
+  const closeSidebar = () => {
+    setIsMobileOpen(false);
+    setIsHovered(false);
+  };
+
   const toggleSubmenu = (item: string) => {
     setOpenSubmenu((prev) => (prev === item ? null : item));
   };
 
+  // Close mobile sidebar on window resize to desktop
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth >= 1024) { // lg breakpoint
+        setIsMobileOpen(false);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Handle keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && isMobileOpen) {
+        closeSidebar();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isMobileOpen]);
+
   return (
     <SidebarContext.Provider
       value={{
-        isExpanded: isMobile ? false : isExpanded,
-        isMobileOpen,
+        isExpanded,
         isHovered,
+        isMobileOpen,
         activeItem,
         openSubmenu,
         toggleSidebar,
@@ -76,6 +88,7 @@ export const SidebarProvider: React.FC<{ children: React.ReactNode }> = ({
         setIsHovered,
         setActiveItem,
         toggleSubmenu,
+        closeSidebar,
       }}
     >
       {children}

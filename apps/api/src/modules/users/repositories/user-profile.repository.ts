@@ -150,7 +150,7 @@ export class UserProfileRepository {
     if (completionPercentage === 100) {
       return ProfileCompletionStatus.COMPLETE;
     } else if (completionPercentage >= 50) {
-      return ProfileCompletionStatus.BASIC;
+      return ProfileCompletionStatus.PARTIAL;
     } else {
       return ProfileCompletionStatus.INCOMPLETE;
     }

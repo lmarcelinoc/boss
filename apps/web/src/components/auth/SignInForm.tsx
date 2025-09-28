@@ -5,9 +5,9 @@ import Label from "@/components/form/Label";
 import Button from "@/components/ui/button/Button";
 import { ChevronLeftIcon, EyeCloseIcon, EyeIcon } from "@/icons";
 import Link from "next/link";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export default function SignInForm() {
   const [showPassword, setShowPassword] = useState(false);
@@ -24,6 +24,15 @@ export default function SignInForm() {
 
   const { login } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Handle URL parameters for messages (like password reset success)
+  useEffect(() => {
+    const message = searchParams?.get('message');
+    if (message === 'password-reset-success') {
+      setSuccess("Password reset successfully! You can now sign in with your new password.");
+    }
+  }, [searchParams]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -102,8 +111,8 @@ export default function SignInForm() {
   };
 
   return (
-    <div className="flex flex-col flex-1 lg:w-1/2 w-full">
-      <div className="w-full max-w-md sm:pt-10 mx-auto mb-5">
+    <div className="flex flex-col flex-1 w-full lg:w-1/2 min-h-screen">
+      <div className="w-full max-w-md mx-auto mb-5 pt-4 sm:pt-6 md:pt-10">
         <Link
           href="/"
           className="inline-flex items-center text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
@@ -112,13 +121,13 @@ export default function SignInForm() {
           Back to dashboard
         </Link>
       </div>
-      <div className="flex flex-col justify-center flex-1 w-full max-w-md mx-auto">
+      <div className="flex flex-col justify-center flex-1 w-full max-w-md mx-auto px-4 sm:px-0">
         <div>
-          <div className="mb-5 sm:mb-8">
-            <h1 className="mb-2 font-semibold text-gray-800 text-title-sm dark:text-white/90 sm:text-title-md">
+          <div className="mb-6 sm:mb-8">
+            <h1 className="mb-3 font-semibold text-gray-800 text-xl dark:text-white/90 sm:text-2xl lg:text-title-md">
               Sign In
             </h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
+            <p className="text-sm text-gray-500 dark:text-gray-400 sm:text-base">
               {requiresMfa 
                 ? "Enter your two-factor authentication code to continue"
                 : "Enter your email and password to sign in!"
@@ -144,11 +153,11 @@ export default function SignInForm() {
             {/* Social Auth Buttons */}
             {!requiresMfa && (
               <>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-5">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 md:gap-5">
                   <button
                     type="button"
                     onClick={() => handleSocialAuth("Google")}
-                    className="inline-flex items-center justify-center gap-3 py-3 text-sm font-normal text-gray-700 transition-colors bg-gray-100 rounded-lg px-7 hover:bg-gray-200 hover:text-gray-800 dark:bg-white/5 dark:text-white/90 dark:hover:bg-white/10"
+                    className="inline-flex items-center justify-center gap-2 py-3 text-sm font-normal text-gray-700 transition-colors bg-gray-100 rounded-lg px-4 hover:bg-gray-200 hover:text-gray-800 dark:bg-white/5 dark:text-white/90 dark:hover:bg-white/10 sm:gap-3 sm:px-7"
                   >
                     <svg
                       width="20"
@@ -179,7 +188,7 @@ export default function SignInForm() {
                   <button
                     type="button"
                     onClick={() => handleSocialAuth("X")}
-                    className="inline-flex items-center justify-center gap-3 py-3 text-sm font-normal text-gray-700 transition-colors bg-gray-100 rounded-lg px-7 hover:bg-gray-200 hover:text-gray-800 dark:bg-white/5 dark:text-white/90 dark:hover:bg-white/10"
+                    className="inline-flex items-center justify-center gap-2 py-3 text-sm font-normal text-gray-700 transition-colors bg-gray-100 rounded-lg px-4 hover:bg-gray-200 hover:text-gray-800 dark:bg-white/5 dark:text-white/90 dark:hover:bg-white/10 sm:gap-3 sm:px-7"
                   >
                     <svg
                       width="21"
@@ -209,7 +218,7 @@ export default function SignInForm() {
 
             {/* Login Form */}
             <form onSubmit={handleSubmit}>
-              <div className="space-y-6">
+              <div className="space-y-4 sm:space-y-5 md:space-y-6">
                 {!requiresMfa ? (
                   <>
                     <div>
@@ -258,7 +267,7 @@ export default function SignInForm() {
                         </span>
                       </div>
                       <Link
-                        href="/reset-password"
+                        href="/forgot-password"
                         className="text-sm text-brand-500 hover:text-brand-600 dark:text-brand-400"
                       >
                         Forgot password?

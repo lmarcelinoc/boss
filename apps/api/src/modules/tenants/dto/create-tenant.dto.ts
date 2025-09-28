@@ -50,7 +50,19 @@ export class CreateTenantDto {
   @IsOptional()
   @IsUrl()
   @MaxLength(255)
-  logo?: string;
+  logoUrl?: string;
+
+  @ApiPropertyOptional({
+    description: 'Tenant slug (URL-safe identifier)',
+    example: 'acme-corp',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[a-z0-9-]+$/, {
+    message: 'Slug must contain only lowercase letters, numbers, and hyphens',
+  })
+  @MaxLength(100)
+  slug?: string;
 
   @ApiPropertyOptional({
     description: 'Primary brand color (hex format)',

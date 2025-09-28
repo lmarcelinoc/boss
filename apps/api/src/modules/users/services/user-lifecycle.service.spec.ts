@@ -1,27 +1,37 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 import { UserLifecycleService } from './user-lifecycle.service';
 import { EmailService } from '../../email/services/email.service';
 import { AuditService } from '../../audit/services/audit.service';
-import { User } from '../entities/user.entity';
+import { UserRepository } from '../repositories/user.repository';
+import { User } from '@prisma/client';
 import { UserRole, UserStatus } from '@app/shared';
 import { AuditEventType } from '../../audit/entities/audit-log.entity';
 
 describe('UserLifecycleService', () => {
   let service: UserLifecycleService;
-  let userRepository: Repository<User>;
+  let userRepository: UserRepository;
   let emailService: EmailService;
   let auditService: AuditService;
 
   const mockUserRepository = {
     create: jest.fn(),
-    save: jest.fn(),
-    findOne: jest.fn(),
-    find: jest.fn(),
+    findById: jest.fn(),
+    findByEmail: jest.fn(),
+    findByRole: jest.fn(),
+    findByStatus: jest.fn(),
+    findActive: jest.fn(),
+    findMany: jest.fn(),
+    update: jest.fn(),
     softDelete: jest.fn(),
+    count: jest.fn(),
+    updateLastLogin: jest.fn(),
+    findForBulkOperations: jest.fn(),
+    // Legacy TypeORM-style methods for backward compatibility in tests
+    findOne: jest.fn(),
+    save: jest.fn(),
+    find: jest.fn(),
   };
 
   const mockEmailService = {
@@ -37,22 +47,32 @@ describe('UserLifecycleService', () => {
     logEvent: jest.fn(),
   };
 
-  const mockUser: Partial<User> = {
+  const mockUser: User = {
     id: 'user-123',
     email: 'test@example.com',
+    password: 'hashedpassword',
     firstName: 'John',
     lastName: 'Doe',
-    role: UserRole.MEMBER,
-    status: UserStatus.PENDING,
-    tenantId: 'tenant-123',
+    avatar: null,
+    avatarUrl: null,
+    isActive: true,
     emailVerified: false,
-    generateEmailVerificationToken: jest.fn(),
-    markEmailAsVerified: jest.fn().mockImplementation(() => {
-      const user = mockUser as any;
-      user.emailVerified = true;
-      user.emailVerifiedAt = new Date();
-    }),
+    emailVerifiedAt: null,
+    emailVerificationToken: null,
+    emailVerificationTokenExpiresAt: null,
+    passwordResetToken: null,
+    passwordResetTokenExpiresAt: null,
+    twoFactorEnabled: false,
+    twoFactorSecret: null,
+    twoFactorBackupCodes: [],
+    authProvider: 'local',
+    status: 'pending',
+    lastLoginAt: null,
+    lastLoginIp: null,
+    tenantId: 'tenant-123',
     metadata: {},
+    createdAt: new Date(),
+    updatedAt: new Date(),
   };
 
   beforeEach(async () => {
@@ -60,7 +80,7 @@ describe('UserLifecycleService', () => {
       providers: [
         UserLifecycleService,
         {
-          provide: getRepositoryToken(User),
+          provide: UserRepository,
           useValue: mockUserRepository,
         },
         {
@@ -75,7 +95,7 @@ describe('UserLifecycleService', () => {
     }).compile();
 
     service = module.get<UserLifecycleService>(UserLifecycleService);
-    userRepository = module.get<Repository<User>>(getRepositoryToken(User));
+    userRepository = module.get<UserRepository>(UserRepository);
     emailService = module.get<EmailService>(EmailService);
     auditService = module.get<AuditService>(AuditService);
   });
@@ -272,7 +292,7 @@ describe('UserLifecycleService', () => {
         })
       );
       expect(mockAuditService.logEvent).toHaveBeenCalledWith({
-        eventType: AuditEventType.USER_ACTIVATED,
+        eventType: AuditEventType.USER_REACTIVATED,
         userId: pendingUser.id,
         tenantId: pendingUser.tenantId,
         userEmail: pendingUser.email,

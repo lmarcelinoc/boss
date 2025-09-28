@@ -14,6 +14,14 @@ import {
   Res,
   Header,
 } from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiParam,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { Response } from 'express';
 import { InvoiceService } from '../services/invoice.service';
 import { PdfGenerationService } from '../services/pdf-generation.service';
@@ -21,6 +29,8 @@ import { CreateInvoiceDto, UpdateInvoiceDto, InvoiceQueryDto } from '../dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { TenantGuard } from '../../../common/guards/tenant.guard';
 
+@ApiTags('Billing')
+@ApiBearerAuth('JWT-auth')
 @Controller('billing/invoices')
 @UseGuards(JwtAuthGuard, TenantGuard)
 export class InvoiceController {
@@ -30,6 +40,36 @@ export class InvoiceController {
   ) {}
 
   @Post()
+  @ApiOperation({
+    summary: 'Create a new invoice',
+    description: 'Create a new invoice for the current tenant with specified line items and billing details.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Invoice created successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            invoiceNumber: { type: 'string' },
+            amount: { type: 'number' },
+            currency: { type: 'string', example: 'USD' },
+            status: { type: 'string', enum: ['draft', 'pending', 'paid', 'overdue', 'cancelled'] },
+            dueDate: { type: 'string', format: 'date-time' },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        message: { type: 'string', example: 'Invoice created successfully' },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Bad request - Invalid invoice data' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - JWT token required' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Insufficient permissions' })
   async createInvoice(
     @Request() req: any,
     @Body() createInvoiceDto: CreateInvoiceDto
@@ -48,6 +88,52 @@ export class InvoiceController {
   }
 
   @Get()
+  @ApiOperation({
+    summary: 'Get all invoices',
+    description: 'Retrieve a paginated list of all invoices for the current tenant with optional filtering and sorting.',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 10)' })
+  @ApiQuery({ name: 'status', required: false, type: String, description: 'Filter by invoice status' })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search by invoice number or customer' })
+  @ApiQuery({ name: 'sortBy', required: false, type: String, description: 'Sort field (default: createdAt)' })
+  @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'], description: 'Sort order (default: desc)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Invoices retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', format: 'uuid' },
+              invoiceNumber: { type: 'string' },
+              amount: { type: 'number' },
+              currency: { type: 'string' },
+              status: { type: 'string' },
+              dueDate: { type: 'string', format: 'date-time' },
+              createdAt: { type: 'string', format: 'date-time' },
+            },
+          },
+        },
+        pagination: {
+          type: 'object',
+          properties: {
+            total: { type: 'number' },
+            page: { type: 'number' },
+            limit: { type: 'number' },
+            totalPages: { type: 'number' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized - JWT token required' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Insufficient permissions' })
   async getInvoices(@Request() req: any, @Query() query: InvoiceQueryDto) {
     const tenantId = req.user.tenantId;
     const result = await this.invoiceService.findByTenant(tenantId, query);

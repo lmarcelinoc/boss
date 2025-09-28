@@ -1,35 +1,33 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThan } from 'typeorm';
 import { Request } from 'express';
+import { PrismaService } from '../../../database/prisma.service';
 
 import {
-  AuditLog,
   AuditEventType,
   AuditEventStatus,
   AuditEventSeverity,
 } from '../entities/audit-log.entity';
-import { User } from '../../users/entities/user.entity';
+import { AuditLog } from '@prisma/client';
 
 export interface AuditLogData {
   eventType: AuditEventType;
-  userId?: string | undefined;
-  tenantId?: string | undefined;
-  sessionId?: string | undefined;
-  ipAddress?: string | undefined;
-  userAgent?: string | undefined;
-  userEmail?: string | undefined;
-  targetUserId?: string | undefined;
-  targetUserEmail?: string | undefined;
-  description?: string | undefined;
-  metadata?: Record<string, any> | undefined;
-  requestData?: Record<string, any> | undefined;
-  responseData?: Record<string, any> | undefined;
-  errorCode?: string | undefined;
-  errorMessage?: string | undefined;
-  source?: string | undefined;
-  severity?: AuditEventSeverity | undefined;
-  status?: AuditEventStatus | undefined;
+  userId?: string;
+  tenantId?: string;
+  sessionId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  userEmail?: string;
+  targetUserId?: string;
+  targetUserEmail?: string;
+  description?: string;
+  metadata?: Record<string, any>;
+  requestData?: Record<string, any>;
+  responseData?: Record<string, any>;
+  errorCode?: string;
+  errorMessage?: string;
+  source?: string;
+  severity?: AuditEventSeverity;
+  status?: AuditEventStatus;
 }
 
 export interface SuspiciousActivityConfig {
@@ -67,10 +65,7 @@ export class AuditService {
   };
 
   constructor(
-    @InjectRepository(AuditLog)
-    private readonly auditLogRepository: Repository<AuditLog>,
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>
+    private readonly prisma: PrismaService
   ) {}
 
   /**

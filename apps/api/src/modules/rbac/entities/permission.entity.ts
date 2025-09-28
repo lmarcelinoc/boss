@@ -27,6 +27,8 @@ export enum PermissionResource {
   FILES = 'files',
   NOTIFICATIONS = 'notifications',
   REPORTS = 'reports',
+  ANALYTICS = 'analytics',
+  AUDIT = 'audit',
   SYSTEM_SETTINGS = 'system_settings'
 }
 
